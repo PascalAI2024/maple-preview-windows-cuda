@@ -1,0 +1,11 @@
+# Model weights are fetched from Hugging Face, never committed.
+models/
+*.gguf
+*.safetensors
+
+# Upstream fork is cloned by scripts/02-build.ps1, not vendored.
+fork/
+build/
+
+# Logs and scratch
+*.log

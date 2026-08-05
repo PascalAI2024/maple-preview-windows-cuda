@@ -1,0 +1,202 @@
+# Running Maple-Preview locally on Windows + CUDA
+
+Four scripts that take a stock Windows machine to a running
+[Maple-Preview](https://huggingface.co/deepgrove/maple-preview) — a 20B-A1B
+**ternary-weight** MoE reasoning model — served over an OpenAI-compatible API on
+consumer hardware.
+
+No weights are committed here. Everything is pulled from Hugging Face at setup
+time.
+
+---
+
+## Why this repo exists
+
+The original goal was mundane: *install Maple-Preview in LM Studio*. It turns
+out that is impossible, and the interesting part is **why**.
+
+Maple's weights are ternary — every value is `{-1, 0, +1}` with a per-row scale,
+which is how 20B parameters compress into 5.45 GB. That format is
+`GGML_TYPE_TQ2_0` (type 35), and the architecture is a 3:1 hybrid of
+sliding-window and global attention where the **global layers carry no
+positional encoding at all**. Neither the type nor the architecture exists in
+mainline llama.cpp:
+
+```console
+$ curl -sL .../llama.cpp/master/src/llama-arch.cpp | grep -ic "MAPLE"
+0
+```
+
+LM Studio ships a mainline-derived llama.cpp (`…cuda12-avx2@2.27.1`, GGUF only),
+so it rejects these files with `unknown model architecture: 'maple'`. There is
+no setting that fixes this, and no plugin interface to extend it.
+
+**[→ Full diagnostic writeup with the complete evidence trail](docs/why-lm-studio-cannot-run-maple.md)**
+
+The path that *does* work is building the fork that implements the architecture,
+and running it alongside LM Studio rather than inside it.
+
+---
+
+## Quickstart
+
+```powershell
+git clone https://github.com/PascalAI2024/maple-preview-windows-cuda.git
+cd maple-preview-windows-cuda
+
+./scripts/01-install-toolchain.ps1   # MSVC + Ninja + CMake + CUDA 12.8  (~10 GB)
+./scripts/02-build.ps1               # clone + build the Maple fork
+./scripts/03-download-model.ps1      # pull maple-tq2_0.gguf from HF     (5.45 GB)
+./scripts/04-run.ps1 -Mode complete  # verify it generates
+```
+
+Then serve it:
+
+```powershell
+./scripts/04-run.ps1 -Mode server    # OpenAI-compatible API on :8080
+```
+
+```console
+$ curl -s http://127.0.0.1:8080/v1/chat/completions \
+    -H "Content-Type: application/json" \
+    -d '{"messages":[{"role":"user","content":"Name the capital of Japan in exactly one word."}]}'
+
+{"choices":[{"message":{"content":"Tokyo"}}],
+ "model":"maple-tq2_0.gguf",
+ "usage":{"prompt_tokens":20,"completion_tokens":32,"total_tokens":52}}
+```
+
+### Requirements
+
+- Windows 10/11, NVIDIA GPU (compute capability detected automatically)
+- ~8 GB VRAM for the `tq2_0` pack at 8K context (measured, see below)
+- ~20 GB disk for toolchain + fork + build, plus the model
+
+---
+
+## Measured results
+
+Everything below was measured on this setup, not estimated or copied.
+
+**RTX 4080 SUPER (16 GB) · CUDA 12.8 · MSVC 14.44 · sm_89 · fork rev `9ee03ee`**
+
+```console
+$ ./scripts/04-run.ps1 -Mode bench
+| model                             |   size |  params | backend | ngl |  test |             t/s |
+| --------------------------------- | -----: | ------: | ------- | --: | ----: | --------------: |
+| maple ?B TQ2_0 - 2.06 bpw ternary | 5.07GiB| 20.21 B | CUDA    |  99 | pp512 | 1196.13 ± 36.94 |
+| maple ?B TQ2_0 - 2.06 bpw ternary | 5.07GiB| 20.21 B | CUDA    |  99 | tg128 |    47.78 ±  2.36 |
+```
+
+| Metric | Value |
+|---|---|
+| Prompt processing (pp512) | **1196 t/s** |
+| Token generation (tg128) | **47.8 t/s** |
+| VRAM, 8K ctx, 4 server slots | **7.3 GB** of 16 GB |
+| Model load → first token | ~3 s |
+| Build time (434 targets, one arch) | ~10 min |
+
+A 20B-parameter model generating at ~48 t/s in 7.3 GB of VRAM is the whole point
+of ternary weights.
+
+**An honest discrepancy:** the fork's README reports ~97 t/s on an RTX 4000 Ada —
+roughly double what I measure on a nominally faster card. I did not chase this
+down. The likely explanation is methodology (`llama-bench` tg128 averages a
+128-token batch with full sampling overhead; a short interactive generation on
+this same box reported 60.3 t/s). Treat both numbers as provisional on day-zero
+code rather than assuming either is wrong.
+
+---
+
+## What each script does
+
+| Script | Does | Notes |
+|---|---|---|
+| `01-install-toolchain.ps1` | winget-installs MSVC, Ninja, CMake, CUDA | Chained, not parallel — concurrent MSI installs fight over the Windows Installer mutex |
+| `02-build.ps1` | Clones `stamsam/llama.cpp@prism`, builds with CUDA | Detects compute capability from `nvidia-smi`; asserts `LLM_ARCH_MAPLE` is present before spending 30 min on nvcc |
+| `03-download-model.ps1` | Fetches a GGUF from Hugging Face | Resumable; verifies byte count and GGUF magic |
+| `04-run.ps1` | Runs `chat`, `server`, `complete`, or `bench` | `-NGL 99` offloads every layer; adds CUDA to PATH so the loader finds `cudart`/`cublas` |
+
+`04-run.ps1 -Mode <mode>`:
+
+| Mode | Binary | Use |
+|---|---|---|
+| `chat` | `llama-cli` | Interactive terminal session |
+| `server` | `llama-server` | OpenAI-compatible API on :8080 |
+| `complete` | `llama-completion` | One-shot prompt, prints and exits |
+| `bench` | `llama-bench` | Throughput measurement |
+
+This fork's `llama-cli` dropped `--no-conversation` (*"please use
+llama-completion instead"*), which is why one-shot generation is a separate
+binary rather than a flag.
+
+### Model variants
+
+`03-download-model.ps1 -Variant <name>` — sizes measured, not estimated:
+
+| Variant | Size | Notes |
+|---|---|---|
+| `tq2_0` | 5.45 GB | Ternary, the fork's native format — **default** |
+| `q4_k_m` | 12.33 GB | Uniform Q4_K_M |
+| `f16` | 40.5 GB | Dense reference; needs heavy offload on consumer cards |
+
+---
+
+## The model
+
+| Property | Value |
+|---|---|
+| Params | 20.2 B total, ~1 B active (A1B) |
+| Layers | 24 |
+| MoE | 256 experts, top-8, `moe_intermediate` 512, clamp-7 SwiGLU |
+| Attention | 3:1 hybrid — SWA-512 : Global Attention |
+| RoPE | Partial (64/128, theta 10000) on SWA layers; **none** on GA layers |
+| Context | 131,072 |
+| Licence | MIT |
+
+---
+
+## Things that bit me
+
+Recorded because each cost real time and the failure modes are unhelpful.
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Build exits 255 immediately, no diagnostic | A generated `.bat` used `^` line continuations, and PowerShell wrote it with LF endings. `cmd` mis-parses continuations on LF and stops **silently** | Don't generate batch wrappers. Import the MSVC env into PowerShell and call `cmake` directly with an argument array |
+| `Join-Path : Cannot bind argument … empty string` | `$PSScriptRoot` is not reliably populated inside a `param()` default block | Default to `''`, resolve in the script body |
+| `nvcc is not recognized` right after a successful CUDA install | `%CUDA_PATH%` is only set for shells started *after* the installer runs | Glob `…/NVIDIA GPU Computing Toolkit/CUDA/v*` for the newest dir containing `nvcc.exe` |
+| Exit `-1073741515`, no message | `0xC0000135` = `STATUS_DLL_NOT_FOUND`. `cudart64_*.dll`/`cublas64_*.dll` are not copied next to the exe | Prepend the toolkit's `bin` to `PATH` at run time |
+| `llama-cli` ignores the prompt, loops on `>` forever | This fork removed `--no-conversation` | Use the `llama-completion` binary |
+| `ReadAllBytes … file is too long` | .NET Framework caps `ReadAllBytes` at 2 GB; these files are 5–40 GB | Read the 4 magic bytes via a `FileStream` |
+
+## Caveats
+
+Read these before drawing conclusions from anything this repo produces.
+
+- **This is day-zero code.** Both Maple-Preview and the runtime fork were
+  published 2026-08-05. The fork's own status note: *"no benchmarks, perplexity,
+  or systematic evals yet."*
+- **The fork is a research port, not a distribution.** It publishes no releases,
+  which is why these scripts build from source.
+- **`tq2_0` GPU support is new.** Its CUDA kernels landed at rev `9ee03ee`.
+  Large-batch matmuls still fall back to a dequant+GEMM path because the `mmq`
+  kernels are not ported yet, so prompt processing has headroom left — 1196 t/s
+  is *below* what this card should eventually manage, not a ceiling.
+- **LM Studio is untouched.** Nothing here modifies your existing install; the
+  fork runs as a separate server.
+- **If mainline llama.cpp ever merges `maple` + `tq2_0`, this repo is
+  obsolete** and LM Studio would support the model directly. That is the good
+  outcome.
+
+---
+
+## Credits
+
+This repo is glue and documentation. The hard work belongs to others:
+
+- **[deepgrove/maple-preview](https://huggingface.co/deepgrove/maple-preview)** — the model (MIT)
+- **[stamsam/llama.cpp](https://github.com/stamsam/llama.cpp)** (branch `prism`) — the Maple architecture, ternary `tq2_0` type, and CUDA kernels that make any of this possible (MIT)
+- **[stamsam/maple-preview-gguf](https://huggingface.co/stamsam/maple-preview-gguf)** — the GGUF conversions (MIT)
+- **[ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp)** — upstream (MIT)
+
+Licensed MIT. See [LICENSE](LICENSE).

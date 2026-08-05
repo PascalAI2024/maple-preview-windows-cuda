@@ -1,0 +1,11 @@
+# Normalise to LF in the repo, but check PowerShell and batch files out as CRLF.
+# This is not cosmetic: cmd.exe mis-parses `^` line continuations in a .bat with
+# LF endings and fails silently. See the "Things that bit me" table in README.md.
+* text=auto
+
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+*.md  text eol=lf
+*.gguf binary

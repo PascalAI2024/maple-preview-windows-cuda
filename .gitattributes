@@ -9,3 +9,7 @@
 
 *.md  text eol=lf
 *.gguf binary
+
+# Never touch patch files. `git diff` output is byte-sensitive: CRLF-converting a
+# patch makes its context lines stop matching LF sources, and `git apply` fails.
+*.patch -text

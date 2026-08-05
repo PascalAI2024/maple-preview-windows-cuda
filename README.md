@@ -80,31 +80,59 @@ Everything below was measured on this setup, not estimated or copied.
 
 **RTX 4080 SUPER (16 GB) · CUDA 12.8 · MSVC 14.44 · sm_89 · fork rev `9ee03ee`**
 
-```console
-$ ./scripts/04-run.ps1 -Mode bench
-| model                             |   size |  params | backend | ngl |  test |             t/s |
-| --------------------------------- | -----: | ------: | ------- | --: | ----: | --------------: |
-| maple ?B TQ2_0 - 2.06 bpw ternary | 5.07GiB| 20.21 B | CUDA    |  99 | pp512 | 1196.13 ± 36.94 |
-| maple ?B TQ2_0 - 2.06 bpw ternary | 5.07GiB| 20.21 B | CUDA    |  99 | tg128 |    47.78 ±  2.36 |
-```
-
 | Metric | Value |
 |---|---|
-| Prompt processing (pp512) | **1196 t/s** |
-| Token generation (tg128) | **47.8 t/s** |
+| Prompt processing (pp512) | **1173 t/s** |
+| Token generation (tg128) | **254.8 t/s** |
 | VRAM, 8K ctx, 4 server slots | **7.3 GB** of 16 GB |
 | Model load → first token | ~3 s |
 | Build time (434 targets, one arch) | ~10 min |
 
-A 20B-parameter model generating at ~48 t/s in 7.3 GB of VRAM is the whole point
-of ternary weights.
+A 20B-parameter model generating at **~255 t/s in 7.3 GB of VRAM** is the whole
+point of ternary weights.
 
-**An honest discrepancy:** the fork's README reports ~97 t/s on an RTX 4000 Ada —
-roughly double what I measure on a nominally faster card. I did not chase this
-down. The likely explanation is methodology (`llama-bench` tg128 averages a
-128-token batch with full sampling overhead; a short interactive generation on
-this same box reported 60.3 t/s). Treat both numbers as provisional on day-zero
-code rather than assuming either is wrong.
+### The 4.9× speedup
+
+Out of the box this ran at **52 t/s**, which was suspicious: Maple activates only
+~1B of its 20B parameters per token, and a dense 1B model on this card runs many
+hundreds of t/s.
+
+The cause was a single line in `ggml/src/ggml-cuda/mmvq.cu`. `get_mmvq_mmid_max_batch`
+returned `-1` for the ternary type, and the call site tests `ne2 <= mmvq_mmid_max`
+— which, since `ne2` is a batch size ≥ 1, is **never true**. The ternary MMVQ
+kernel existed and was wired for MoE expert routing, but was unreachable at every
+batch size, so every expert matmul fell through to dequantize-to-F32 + GEMM.
+
+Returning `1` instead admits batch-1 generation to the fast kernel while leaving
+large batches on the old path:
+
+| Build | pp512 | tg128 | Size |
+|---|---:|---:|---:|
+| `tq2_0` unpatched | 1255.7 | 52.1 | 5.07 GiB |
+| `tq2_0` **patched** | 1173.4 | **254.8** | 5.07 GiB |
+| `q4_k_m` (control, mature kernels) | **8130.5** | 298.2 | 11.48 GiB |
+
+The `q4_k_m` control is what makes this conclusive rather than merely faster:
+ternary generation went from 17% to **85%** of the mature-kernel baseline, in 44%
+of the memory. The remaining `pp512` gap (1173 vs 8130) is the missing ternary
+MMQ kernels — real kernel work, not a guard fix.
+
+Output was verified unchanged at `--temp 0` across arithmetic, multi-step time
+reasoning, and factual recall.
+
+The patch is applied automatically by `02-build.ps1`; use `-NoPatch` for the
+stock build.
+
+**[→ Full investigation, evidence, and correctness checks](docs/moe-ternary-perf-fix.md)**
+
+**On the 218 tok/s claim:** the model card's headline figure is measured on an
+**M4 Mac mini using deepgrove's own on-device runtime** — a different stack
+entirely from CUDA + llama.cpp, so it was never a like-for-like comparison with
+the numbers here.
+
+**I am not upstreaming this.** llama.cpp's `AGENTS.md` does not accept
+predominantly AI-generated PRs and instructs autonomous agents not to contribute;
+it exempts private forks, which is what this is.
 
 ---
 
@@ -179,9 +207,12 @@ Read these before drawing conclusions from anything this repo produces.
 - **The fork is a research port, not a distribution.** It publishes no releases,
   which is why these scripts build from source.
 - **`tq2_0` GPU support is new.** Its CUDA kernels landed at rev `9ee03ee`.
-  Large-batch matmuls still fall back to a dequant+GEMM path because the `mmq`
-  kernels are not ported yet, so prompt processing has headroom left — 1196 t/s
-  is *below* what this card should eventually manage, not a ceiling.
+  Large-batch matmuls still fall back to dequant+GEMM because the ternary `mmq`
+  kernels are not written yet — measured at ~7× slower prompt processing than
+  `q4_k_m` on the identical model. That is the main remaining gap.
+- **The performance patch is mine, not upstream's**, and is verified on exactly
+  one GPU (sm_89). See [the writeup](docs/moe-ternary-perf-fix.md) for what was
+  and was not checked; `-NoPatch` builds the fork stock.
 - **LM Studio is untouched.** Nothing here modifies your existing install; the
   fork runs as a separate server.
 - **If mainline llama.cpp ever merges `maple` + `tq2_0`, this repo is

@@ -19,7 +19,9 @@ param(
     [string]$Branch   = 'prism',
     [string]$ForkDir  = '',
     [string]$CudaArch = '',
-    [switch]$Clean
+    [switch]$Clean,
+    # Skip the local performance patches in patches/. See docs/moe-ternary-perf-fix.md.
+    [switch]$NoPatch
 )
 
 $ErrorActionPreference = 'Stop'
@@ -130,6 +132,38 @@ if (-not (Select-String -Path $archFile -Pattern 'LLM_ARCH_MAPLE' -Quiet)) {
     throw "This checkout has no LLM_ARCH_MAPLE -- wrong repo or branch."
 }
 Write-Host "    verified LLM_ARCH_MAPLE present" -ForegroundColor Green
+
+# ---------------------------------------------------------------------------
+# Apply local performance patches
+#
+# patches/0001 gives a ~4.9x token-generation speedup by letting batch-1 MoE
+# expert matmuls use the ternary MMVQ kernel. Measured, and output verified
+# unchanged -- see docs/moe-ternary-perf-fix.md.
+# ---------------------------------------------------------------------------
+
+if (-not $NoPatch) {
+    $patchDir = Join-Path $ScriptRoot '..\patches'
+    if (Test-Path $patchDir) {
+        foreach ($p in (Get-ChildItem $patchDir -Filter '*.patch' | Sort-Object Name)) {
+            # --reverse --check tells us it is already applied; skip rather than fail.
+            & git -C $ForkDir apply --reverse --check $p.FullName 2>$null
+            if ($LASTEXITCODE -eq 0) {
+                Write-Host "    patch already applied: $($p.Name)" -ForegroundColor DarkGray
+                continue
+            }
+            & git -C $ForkDir apply --check $p.FullName 2>$null
+            if ($LASTEXITCODE -ne 0) {
+                Write-Warning "    patch does not apply cleanly, skipping: $($p.Name)"
+                continue
+            }
+            & git -C $ForkDir apply $p.FullName
+            if ($LASTEXITCODE -ne 0) { throw "failed to apply $($p.Name)" }
+            Write-Host "    applied patch: $($p.Name)" -ForegroundColor Green
+        }
+    }
+} else {
+    Write-Host "    -NoPatch: building upstream fork as-is" -ForegroundColor DarkGray
+}
 
 # ---------------------------------------------------------------------------
 # Configure + build

@@ -1,0 +1,19 @@
+diff --git a/ggml/src/ggml-cuda/mmvq.cu b/ggml/src/ggml-cuda/mmvq.cu
+index 2dd3e8c..9e81451 100644
+--- a/ggml/src/ggml-cuda/mmvq.cu
++++ b/ggml/src/ggml-cuda/mmvq.cu
+@@ -252,7 +252,13 @@ int get_mmvq_mmid_max_batch(ggml_type type, int cc) {
+     // NVIDIA: Volta, Ada Lovelace, and Blackwell always use MMVQ for MUL_MAT_ID.
+     // tq2_0 has mmvq (mul_mat_vec_q) but no mmq kernels: route large batches to dequant+gemm.
+     if (type == GGML_TYPE_TQ2_0) {
+-        return -1;
++        // EXPERIMENT (local only, do not upstream): was `return -1`, which makes
++        // `ne2 <= mmvq_mmid_max` false for every ne2 >= 1 and so disabled MMVQ for
++        // MUL_MAT_ID at *all* batch sizes -- including batch-1 token generation,
++        // which is exactly what MMVQ handles. Returning 1 keeps large batches on
++        // the dequant+gemm path (no mmq kernels for tq2_0) while letting single-token
++        // MoE expert matmuls use vec_dot_tq2_0_q8_1.
++        return 1;
+     }
+     if (GGML_CUDA_CC_IS_NVIDIA(cc)) {
+         if (cc == GGML_CUDA_CC_VOLTA || cc >= GGML_CUDA_CC_ADA_LOVELACE) {

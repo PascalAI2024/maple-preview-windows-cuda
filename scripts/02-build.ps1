@@ -21,7 +21,13 @@ param(
     [string]$CudaArch = '',
     [switch]$Clean,
     # Skip the local performance patches in patches/. See docs/moe-ternary-perf-fix.md.
-    [switch]$NoPatch
+    [switch]$NoPatch,
+    # Also build test-backend-ops, for validating CUDA kernel changes.
+    # See docs/testing-kernels.md.
+    [switch]$WithTests,
+    # Build into an alternate directory. Lets you compile and benchmark a kernel
+    # variant while a server keeps running out of the default build/.
+    [string]$BuildDir = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -169,7 +175,8 @@ if (-not $NoPatch) {
 # Configure + build
 # ---------------------------------------------------------------------------
 
-$buildDir = Join-Path $ForkDir 'build'
+if ($BuildDir) { $buildDir = [System.IO.Path]::GetFullPath($BuildDir) }
+else           { $buildDir = Join-Path $ForkDir 'build' }
 if ($Clean -and (Test-Path $buildDir)) { Remove-Item -Recurse -Force $buildDir }
 
 # LLAMA_CURL=OFF: no libcurl on a stock Windows box, and weights are fetched by
@@ -181,7 +188,7 @@ $configureArgs = @(
     "-DCMAKE_CUDA_ARCHITECTURES=$CudaArch",
     "-DCUDAToolkit_ROOT=$cudaRoot",
     '-DLLAMA_CURL=OFF',
-    '-DLLAMA_BUILD_TESTS=OFF',
+    "-DLLAMA_BUILD_TESTS=$(if ($WithTests) { 'ON' } else { 'OFF' })",
     '-DLLAMA_BUILD_EXAMPLES=OFF',
     '-DLLAMA_BUILD_TOOLS=ON'
 )
@@ -195,6 +202,9 @@ if ($LASTEXITCODE -ne 0) { throw "cmake configure failed (exit $LASTEXITCODE)" }
 # llama-completion  non-interactive one-shot; llama-cli dropped --no-conversation
 # llama-bench  pp/tg throughput measurement
 $targets = @('llama-cli', 'llama-server', 'llama-completion', 'llama-bench')
+# test-backend-ops compares every CUDA kernel against the CPU reference and can
+# also time them in isolation -- the right tool for validating a kernel change.
+if ($WithTests) { $targets += 'test-backend-ops' }
 
 Write-Host "==> Building (this takes a while -- nvcc compiles one arch, sm_$CudaArch)" -ForegroundColor Cyan
 & $cmake --build $buildDir --config Release --target $targets

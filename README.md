@@ -53,8 +53,31 @@ cd maple-preview-windows-cuda
 Then serve it:
 
 ```powershell
-./scripts/04-run.ps1 -Mode server    # OpenAI-compatible API on :8080
+./scripts/04-run.ps1 -Mode server    # web UI + OpenAI-compatible API on :8080
 ```
+
+### Actually using it
+
+**Open <http://127.0.0.1:8080> in a browser.** `llama-server` ships a full chat
+web UI — conversations, settings, reasoning-trace toggle, file attachments, even
+MCP server support. This is the direct LM Studio replacement, and it is the
+simplest way to use the model day to day.
+
+Measured in that UI on the 4080 SUPER: **287.4 t/s** generating a 220-token reply
+(higher than the `llama-bench` figure, which carries more measurement overhead).
+
+Because the same port also speaks the OpenAI API, any compatible client works —
+Open WebUI, Cherry Studio, VS Code extensions, or your own code:
+
+```python
+from openai import OpenAI
+client = OpenAI(base_url="http://127.0.0.1:8080/v1", api_key="not-needed")
+print(client.chat.completions.create(
+    model="maple", messages=[{"role": "user", "content": "Hello"}]
+).choices[0].message.content)
+```
+
+Prefer the terminal? `./scripts/04-run.ps1 -Mode chat`.
 
 ```console
 $ curl -s http://127.0.0.1:8080/v1/chat/completions \
@@ -82,16 +105,35 @@ Everything below was measured on this setup, not estimated or copied.
 
 | Metric | Value |
 |---|---|
-| Prompt processing (pp512) | **1173 t/s** |
-| Token generation (tg128) | **254.8 t/s** |
+| Prompt processing (pp512) | **1636 t/s** |
+| Token generation (tg128) | **376.7 t/s** |
 | VRAM, 8K ctx, 4 server slots | **7.3 GB** of 16 GB |
 | Model load → first token | ~3 s |
 | Build time (434 targets, one arch) | ~10 min |
 
-A 20B-parameter model generating at **~255 t/s in 7.3 GB of VRAM** is the whole
+A 20B-parameter model generating at **~377 t/s in 7.3 GB of VRAM** is the whole
 point of ternary weights.
 
-### The 4.9× speedup
+### Two CUDA fixes, 7.2× faster generation
+
+Out of the box this ran at **52 t/s**. Two changes to the ternary kernels took it
+to **377 t/s**:
+
+| Build | pp512 | tg128 | vs stock |
+|---|---:|---:|---:|
+| stock fork | 1255.7 | 52.1 | — |
+| `+ 0001` enable MMVQ for batch-1 MoE | 1173.4 | 254.8 | 4.9× |
+| `+ 0002` SIMD ternary vec_dot | **1635.8** | **376.7** | **7.2×** |
+| `q4_k_m` reference (mature kernels) | 8130.5 | 298.2 | — |
+
+Note the patched ternary build now **generates faster than Q4_K** (377 vs 298
+t/s) in **44% of the memory** — while still trailing badly on prompt processing,
+which is the missing MMQ kernels.
+
+Both changes are validated against the CPU reference by `test-backend-ops`:
+**103/103 tests pass** (72 MUL_MAT_ID + 31 MUL_MAT).
+
+### Fix 1 — the unreachable fast path
 
 Out of the box this ran at **52 t/s**, which was suspicious: Maple activates only
 ~1B of its 20B parameters per token, and a dense 1B model on this card runs many
@@ -104,24 +146,35 @@ kernel existed and was wired for MoE expert routing, but was unreachable at ever
 batch size, so every expert matmul fell through to dequantize-to-F32 + GEMM.
 
 Returning `1` instead admits batch-1 generation to the fast kernel while leaving
-large batches on the old path:
+large batches on the old path. **52 → 255 t/s.**
 
-| Build | pp512 | tg128 | Size |
-|---|---:|---:|---:|
-| `tq2_0` unpatched | 1255.7 | 52.1 | 5.07 GiB |
-| `tq2_0` **patched** | 1173.4 | **254.8** | 5.07 GiB |
-| `q4_k_m` (control, mature kernels) | **8130.5** | 298.2 | 11.48 GiB |
+### Fix 2 — a scalar loop where SIMD belonged
 
-The `q4_k_m` control is what makes this conclusive rather than merely faster:
-ternary generation went from 17% to **85%** of the mature-kernel baseline, in 44%
-of the memory. The remaining `pp512` gap (1173 vs 8130) is the missing ternary
-MMQ kernels — real kernel work, not a guard fix.
+With the fast path finally reachable, the kernel it reached turned out to be
+unvectorized. `vec_dot_tq2_0_q8_1` looped 32 times, once per element:
 
-Output was verified unchanged at `--temp 0` across arithmetic, multi-step time
-reasoning, and factual recall.
+```c
+for (int j = 0; j < 32; ++j) {
+    const int code = (bq->qs[byte_base + j] >> (2 * lane)) & 0x3;
+    sumi += bq8_1_chunk->qs[j] * (code - 1);
+}
+```
 
-The patch is applied automatically by `02-build.ps1`; use `-NoPatch` for the
-stock build.
+Comparable types use packed integer SIMD. Ternary can too — 4 elements per step:
+
+```c
+const int q4    = get_int_b2(bq->qs, (byte_base + j) / 4);  // 2-byte-aligned read
+const int codes = (q4 >> shift) & 0x03030303;               // 4 codes at once
+const int syms  = __vsub4(codes, 0x01010101);               // {0,1,2} -> {-1,0,+1}
+sumi = ggml_cuda_dp4a(syms, get_int_b4(bq8_1_chunk->qs, j / 4), sumi);
+```
+
+Two details make it work: `__vsub4` does a *per-byte* subtract, because a plain
+integer subtract would let code `0` borrow into the neighbouring byte; and
+`get_int_b2` is the aligned-safe read, since `block_tq2_0` is 66 bytes and so
+blocks land on 2-byte, not 4-byte, boundaries. **255 → 377 t/s.**
+
+Patches are applied automatically by `02-build.ps1`; use `-NoPatch` for stock.
 
 **[→ Full investigation, evidence, and correctness checks](docs/moe-ternary-perf-fix.md)**
 
@@ -183,6 +236,64 @@ binary rather than a flag.
 | Licence | MIT |
 
 ---
+
+## Giving it web search (research mode)
+
+A local model knows nothing after its training cut-off. `mcp/search_server.py` is
+a small MCP server exposing a `web_search` tool, backed by Grok (web + native
+X/Twitter search) or MiniMax. Maple is tool-capable — its chat template has a
+`<tools>` block — so it can drive it.
+
+```powershell
+# 1. search server
+python mcp/search_server.py --port 8181 --backend grok
+
+# 2. model server (--McpProxy lets the browser UI reach MCP servers)
+./scripts/04-run.ps1 -Mode server -McpProxy
+
+# 3. ask something it cannot know from training data
+python mcp/research.py "What did deepgrove release in 2026 and how fast is it?"
+```
+
+Real output from that command:
+
+```
+tools available: ['web_search']
+[round 1] web_search({'query': 'deepgrove Maple-Preview token generation speed Apple hardware'}) ...
+    -> 1505 chars returned
+
+--- answer (after 1 search round(s)) ---
+On Apple hardware, the token generation speeds claimed are:
+- ~218 tokens/s on a Mac mini M4 ... - ~120 tokens/s on iPhone
+These speeds are achieved on-device using a separate runtime (not the CUDA path).
+Sources: https://huggingface.co/deepgrove/maple-preview ...
+```
+
+`research.py` runs the tool-calling loop from the command line, so it works
+without configuring anything in a browser. To use search *in* the web UI instead,
+start the server with `-McpProxy` and add `http://127.0.0.1:8181/mcp` under
+**MCP Servers**.
+
+Both backends are metered — Grok measured **~$0.09 per search**. Neither port
+should be exposed beyond localhost; llama.cpp documents `--ui-mcp-proxy` as
+unsafe in untrusted environments.
+
+## Testing kernel changes
+
+Ternary is **excluded from llama.cpp's test suite** — commented out with
+`// TODO: implement for all backends` — so `tq2_0` kernels ship with no automated
+coverage at all. That is how a bug like Fix 1 survives.
+
+`patches/0003` enables it. To validate a kernel change against the CPU reference:
+
+```powershell
+./scripts/02-build.ps1 -WithTests
+./fork/build/bin/test-backend-ops.exe test -o MUL_MAT_ID -p tq2_0
+./fork/build/bin/test-backend-ops.exe test -o MUL_MAT    -p tq2_0
+```
+
+Use `-BuildDir` to compile a variant into a separate directory, so you can
+benchmark it while a server keeps running out of the default build.
 
 ## Things that bit me
 

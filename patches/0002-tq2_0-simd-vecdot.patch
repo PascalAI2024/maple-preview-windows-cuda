@@ -1,0 +1,38 @@
+diff --git a/ggml/src/ggml-cuda/vecdotq.cuh b/ggml/src/ggml-cuda/vecdotq.cuh
+index 3bf28c7..7d4768c 100644
+--- a/ggml/src/ggml-cuda/vecdotq.cuh
++++ b/ggml/src/ggml-cuda/vecdotq.cuh
+@@ -791,12 +791,29 @@ static __device__ __forceinline__ float vec_dot_tq2_0_q8_1(
+     const int lane      = iqs & 3;
+     const block_q8_1 * bq8_1_chunk = bq8_1 + iqs;
+ 
++    // Process 4 elements per step with SIMD instead of 32 scalar iterations.
++    //
++    // The scalar version did a dependent byte load, shift, mask and multiply-add
++    // per element. Here each step handles 4 elements with three instructions.
++    const int shift = 2 * lane;
++
+     int sumi = 0;
+ #pragma unroll
+-    for (int j = 0; j < 32; ++j) {
+-        const int code = (bq->qs[byte_base + j] >> (2 * lane)) & 0x3;
+-        const int sym  = code - 1; // {-1, 0, 0, +1}
+-        sumi += bq8_1_chunk->qs[j] * sym;
++    for (int j = 0; j < 32; j += 4) {
++        // 4 consecutive packed bytes. block_tq2_0 is 66 bytes (64 qs + fp16 d), so
++        // blocks are only 2-byte aligned -- get_int_b2 is the aligned-safe read.
++        const int q4 = get_int_b2(bq->qs, (byte_base + j) / 4);
++
++        // Extract this lane's 2-bit code from each of the 4 bytes. Bits bleeding in
++        // from the next byte land at position >= 8-shift >= 2, so masking each byte
++        // to its low 2 bits is exact for every lane.
++        const int codes = (q4 >> shift) & 0x03030303;
++
++        // code - 1 maps {0,1,2} -> {-1,0,+1}. Must be a per-byte subtract: code 0
++        // would borrow into the neighbouring byte with a plain integer subtract.
++        const int syms = __vsub4(codes, 0x01010101);
++
++        sumi = ggml_cuda_dp4a(syms, get_int_b4(bq8_1_chunk->qs, j / 4), sumi);
+     }
+ 
+     return sumi * (d * __low2float(bq8_1_chunk->ds));

@@ -35,12 +35,7 @@ param(
     [string]$BindAddress = '127.0.0.1',
 
     [string]$Prompt = 'What is 2+2? Answer in one short sentence.',
-    [int]$NPredict  = 128,
-
-    # Enable the web UI's MCP CORS proxy, so the browser can reach MCP servers
-    # (e.g. mcp/search_server.py). Localhost only -- llama.cpp documents this as
-    # unsafe in untrusted environments.
-    [switch]$McpProxy
+    [int]$NPredict  = 128
 )
 
 $ErrorActionPreference = 'Stop'
@@ -75,10 +70,8 @@ switch ($Mode) {
     'server' {
         # --jinja uses the chat template embedded in the GGUF (ChatML-style
         # <|im_start|>/<|im_end|>), which the tool-calling format depends on.
-        $serverArgs = @('-m', $ModelPath, '-ngl', $NGL, '-c', $Ctx,
-                        '--host', $BindAddress, '--port', $Port, '--jinja')
-        if ($McpProxy) { $serverArgs += '--ui-mcp-proxy' }
-        & $server @serverArgs
+        & $server -m $ModelPath -ngl $NGL -c $Ctx `
+                  --host $BindAddress --port $Port --jinja
     }
     'chat' {
         & $cli -m $ModelPath -ngl $NGL -c $Ctx --jinja -cnv

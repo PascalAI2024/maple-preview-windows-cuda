@@ -92,9 +92,9 @@ Then serve it:
 ### Actually using it
 
 **Open <http://127.0.0.1:8080> in a browser.** `llama-server` ships a full chat
-web UI — conversations, settings, reasoning-trace toggle, file attachments, even
-MCP server support. This is the direct LM Studio replacement, and it is the
-simplest way to use the model day to day.
+web UI — conversations, settings, reasoning-trace toggle, file attachments. This
+is the direct LM Studio replacement, and the simplest way to use the model day to
+day.
 
 Measured in that UI on the 4080 SUPER: **287.4 t/s** generating a 220-token reply
 (higher than the `llama-bench` figure, which carries more measurement overhead).
@@ -110,7 +110,7 @@ print(client.chat.completions.create(
 ).choices[0].message.content)
 ```
 
-Prefer the terminal? `./scripts/04-run.ps1 -Mode chat`.
+Or straight over HTTP:
 
 ```console
 $ curl -s http://127.0.0.1:8080/v1/chat/completions \
@@ -121,6 +121,8 @@ $ curl -s http://127.0.0.1:8080/v1/chat/completions \
  "model":"maple-tq2_0.gguf",
  "usage":{"prompt_tokens":20,"completion_tokens":32,"total_tokens":52}}
 ```
+
+Prefer the terminal? `./scripts/04-run.ps1 -Mode chat`.
 
 ### Requirements
 
@@ -364,114 +366,6 @@ binary rather than a flag.
 | Licence | MIT |
 
 ---
-
-## Giving it web search (research mode)
-
-A local model knows nothing after its training cut-off. `mcp/search_server.py` is
-a small MCP server exposing a `web_search` tool, backed by Grok (web + native
-X/Twitter search) or MiniMax. Maple is tool-capable — its chat template has a
-`<tools>` block — so it can drive it.
-
-```mermaid
-flowchart LR
-    U["You"] --> UI["Web UI :8080<br/><i>or</i> research.py"]
-    UI --> S["llama-server<br/>--jinja --ui-mcp-proxy"]
-    S --> M["Maple-Preview<br/>20B-A1B ternary<br/><b>local, on GPU</b>"]
-    M -->|"tool call"| MCP["search_server.py :8181<br/>MCP over HTTP"]
-    MCP --> G["Grok CLI<br/>web + X search"]
-    MCP --> MM["MiniMax API"]
-    G -->|"results + URLs"| M
-    MM -->|"results + URLs"| M
-    M -->|"cited answer"| UI
-
-    style M fill:#15803d,stroke:#14532d,color:#fff
-    style MCP fill:#1d4ed8,stroke:#1e3a8a,color:#fff
-```
-
-The reasoning stays local on your GPU; only the search query leaves the machine.
-
-```mermaid
-sequenceDiagram
-    participant U as You
-    participant L as Maple (local)
-    participant M as MCP server
-    participant G as Grok
-
-    U->>L: "What did deepgrove release in 2026?"
-    L->>L: recognises it needs current data
-    L->>M: tool_call web_search(query)
-    M->>G: search the web
-    G-->>M: summary + source URLs
-    M-->>L: 1505 chars of results
-    L->>L: synthesise with citations
-    L-->>U: answer + sources
-```
-
-```powershell
-./scripts/05-research-stack.ps1
-```
-
-That is the whole setup. Open <http://127.0.0.1:8080> and ask something current —
-search is already wired in, with nothing to configure in the browser.
-
-**Why a proxy rather than the UI's MCP panel.** llama-server keeps MCP server
-config in the browser's **IndexedDB**, reachable only through a modal in the web
-UI. There is no server-side flag for it, so that setup cannot be scripted,
-committed, or reproduced on another machine. `mcp/search_proxy.py` sits in front
-of llama-server, passes everything through untouched, and injects the
-`web_search` tool into `/v1/chat/completions` — running the tool loop
-server-side. The browser sees an ordinary chat endpoint; the model gets search.
-
-```mermaid
-flowchart LR
-    B["browser :8080"] --> P["search_proxy.py<br/><i>injects tool, runs loop</i>"]
-    P -->|"everything else<br/>passed through"| L["llama-server :8081"]
-    P -->|"/v1/chat/completions"| L
-    P <-->|"tool calls"| M["search_server.py :8181"]
-    M --> G["Grok / MiniMax"]
-
-    style P fill:#1d4ed8,stroke:#1e3a8a,color:#fff
-```
-
-There is also a CLI path that needs no proxy:
-
-```powershell
-python mcp/research.py "What did deepgrove release in 2026 and how fast is it?"
-```
-
-Real output from that command:
-
-```
-tools available: ['web_search']
-[round 1] web_search({'query': 'deepgrove Maple-Preview token generation speed Apple hardware'}) ...
-    -> 1505 chars returned
-
---- answer (after 1 search round(s)) ---
-On Apple hardware, the token generation speeds claimed are:
-- ~218 tokens/s on a Mac mini M4 ... - ~120 tokens/s on iPhone
-These speeds are achieved on-device using a separate runtime (not the CUDA path).
-Sources: https://huggingface.co/deepgrove/maple-preview ...
-```
-
-**One thing the proxy has to work around.** Maple does not always emit a
-structured `tool_calls` field — sometimes it writes the Hermes-style
-`<tool_call>{...}</tool_call>` block as plain text, and when it does so inside the
-reasoning channel, llama-server's parser does not lift it out. The request then
-comes back with no tool call *and* no answer, so the user sees a blank reply. The
-proxy salvages those blocks out of the text and executes them anyway, which is
-what turns tool use from intermittent into reliable. It also forces a final
-answer if the model is still searching when it runs out of rounds, for the same
-reason: otherwise the last message is a tool call with empty content.
-
-**On cost:** the Grok CLI prints a `total_cost_usd` per call (~$0.09 in testing),
-but that is an API-equivalent figure it reports regardless of how the account is
-billed. If the CLI is signed in via OAuth (`auth_mode: oidc` in
-`~/.grok/auth.json`, i.e. a subscription seat), searches draw against plan
-quota and rate limits rather than incurring that charge. Only an API-key setup
-bills per call. MiniMax uses `MINIMAX_API_KEY` and *is* metered per request.
-
-Neither port should be exposed beyond localhost; llama.cpp documents
-`--ui-mcp-proxy` as unsafe in untrusted environments.
 
 ## Testing kernel changes
 

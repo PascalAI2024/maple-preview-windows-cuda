@@ -9,3 +9,7 @@ build/
 
 # Logs and scratch
 *.log
+
+# Python bytecode
+__pycache__/
+*.py[cod]

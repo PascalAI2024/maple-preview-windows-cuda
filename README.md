@@ -10,10 +10,43 @@ time.
 
 ---
 
+```mermaid
+xychart-beta
+    title "Token generation on RTX 4080 SUPER (tg128, t/s)"
+    x-axis ["stock fork", "+ fix 1 (MMVQ)", "+ fix 2 (SIMD)", "q4_k_m ref"]
+    y-axis "tokens / sec" 0 --> 400
+    bar [52.1, 254.8, 376.7, 298.2]
+```
+
+> Two kernel fixes took ternary generation from **52 → 377 t/s (7.2×)**, past the
+> `q4_k_m` reference at 298 t/s — in **44% of the memory**.
+
 ## Why this repo exists
 
 The original goal was mundane: *install Maple-Preview in LM Studio*. It turns
 out that is impossible, and the interesting part is **why**.
+
+```mermaid
+flowchart TD
+    A["Maple-Preview<br/>20B-A1B ternary MoE"] --> B{"Which artifact?"}
+    B -->|"BF16 safetensors"| C["needs trust_remote_code<br/>(Python at load time)"]
+    B -->|"2bit MLX"| D["Apple Silicon only"]
+    B -->|"terasut GGUF"| E["author: NOT SUCCESSFUL"]
+    B -->|"stamsam GGUF"| F{"Runtime has<br/>maple arch?"}
+
+    C --> X["LM Studio loads<br/>GGUF / MLX only"]
+    D --> X
+    E --> X
+    F -->|"mainline llama.cpp<br/>grep -c MAPLE = 0"| X
+    F -->|"stamsam fork @ prism"| G["LLM_ARCH_MAPLE +<br/>GGML_TYPE_TQ2_0 = 35"]
+
+    X["❌ Cannot load"]
+    G --> H["✅ Build the fork,<br/>run alongside LM Studio"]
+
+    style X fill:#b91c1c,stroke:#7f1d1d,color:#fff
+    style G fill:#15803d,stroke:#14532d,color:#fff
+    style H fill:#15803d,stroke:#14532d,color:#fff
+```
 
 Maple's weights are ternary — every value is `{-1, 0, +1}` with a per-row scale,
 which is how 20B parameters compress into 5.45 GB. That format is
@@ -130,6 +163,18 @@ Note the patched ternary build now **generates faster than Q4_K** (377 vs 298
 t/s) in **44% of the memory** — while still trailing badly on prompt processing,
 which is the missing MMQ kernels.
 
+```mermaid
+xychart-beta
+    title "Generation efficiency (tokens/sec per GiB of weights)"
+    x-axis ["tq2_0 stock", "tq2_0 patched", "q4_k_m"]
+    y-axis "t/s per GiB" 0 --> 80
+    bar [10.3, 74.3, 26.0]
+```
+
+Per gigabyte of weights, the patched ternary build does **2.9× more work** than
+Q4_K. That ratio is the entire argument for ternary quantization, and before
+these fixes the CUDA path was throwing it away.
+
 Both changes are validated against the CPU reference by `test-backend-ops`:
 **103/103 tests pass** (72 MUL_MAT_ID + 31 MUL_MAT).
 
@@ -145,8 +190,31 @@ returned `-1` for the ternary type, and the call site tests `ne2 <= mmvq_mmid_ma
 kernel existed and was wired for MoE expert routing, but was unreachable at every
 batch size, so every expert matmul fell through to dequantize-to-F32 + GEMM.
 
-Returning `1` instead admits batch-1 generation to the fast kernel while leaving
-large batches on the old path. **52 → 255 t/s.**
+```mermaid
+flowchart TD
+    A["MoE expert matmul<br/>ggml_cuda_mul_mat_id"] --> B{"quantized type?"}
+    B -->|yes| C["mmvq_mmid_max =<br/>get_mmvq_mmid_max_batch(TQ2_0)"]
+    C --> D["returns <b>-1</b>"]
+    D --> E{"ne2 &lt;= -1 ?<br/>(ne2 is a batch size, always ≥ 1)"}
+    E -->|"NEVER TRUE"| F{"should_use_mmq?"}
+    E -.->|"unreachable"| G["ggml_cuda_mul_mat_vec_q<br/>fast ternary kernel"]
+
+    F -->|"no ternary MMQ kernels"| H{"should_use_mmf?"}
+    H -->|"float types only"| I["generic fallback:<br/>dequantize TQ2_0 → F32<br/>then general GEMM"]
+
+    I --> J["52 t/s"]
+    G --> K["255 t/s"]
+
+    style D fill:#b91c1c,stroke:#7f1d1d,color:#fff
+    style I fill:#b91c1c,stroke:#7f1d1d,color:#fff
+    style J fill:#b91c1c,stroke:#7f1d1d,color:#fff
+    style G fill:#15803d,stroke:#14532d,color:#fff
+    style K fill:#15803d,stroke:#14532d,color:#fff
+```
+
+The dotted edge is the path that *should* have been taken. Returning `1` instead
+of `-1` admits batch-1 generation to the fast kernel while leaving large batches
+on the old path. **52 → 255 t/s.**
 
 ### Fix 2 — a scalar loop where SIMD belonged
 
@@ -174,6 +242,44 @@ integer subtract would let code `0` borrow into the neighbouring byte; and
 `get_int_b2` is the aligned-safe read, since `block_tq2_0` is 66 bytes and so
 blocks land on 2-byte, not 4-byte, boundaries. **255 → 377 t/s.**
 
+```mermaid
+flowchart LR
+    subgraph OLD ["❌ scalar — 32 iterations"]
+        direction TB
+        A1["load byte qs[i]"] --> A2["shift &gt;&gt; 2*lane"]
+        A2 --> A3["mask &amp; 0x3"]
+        A3 --> A4["code - 1"]
+        A4 --> A5["sumi += q8[j] * sym"]
+        A5 -.->|"× 32"| A1
+    end
+
+    subgraph NEW ["✅ SIMD — 8 iterations"]
+        direction TB
+        B1["get_int_b2<br/>4 bytes at once"] --> B2["(q4 &gt;&gt; shift)<br/>&amp; 0x03030303"]
+        B2 --> B3["__vsub4<br/>per-byte -1"]
+        B3 --> B4["ggml_cuda_dp4a<br/>4-way dot product"]
+        B4 -.->|"× 8"| B1
+    end
+
+    OLD --> R["4× fewer iterations<br/>255 → 377 t/s"]
+    NEW --> R
+
+    style R fill:#15803d,stroke:#14532d,color:#fff
+```
+
+Both fixes together, measured across all three metrics:
+
+```mermaid
+xychart-beta
+    title "Prompt processing (pp512, t/s)"
+    x-axis ["stock fork", "+ fix 1 (MMVQ)", "+ fix 2 (SIMD)", "q4_k_m ref"]
+    y-axis "tokens / sec" 0 --> 8500
+    bar [1255.7, 1173.4, 1635.8, 8130.5]
+```
+
+Prompt processing is where ternary still loses badly — that 5× gap to `q4_k_m` is
+the missing MMQ kernels, and it is the honest remaining work.
+
 Patches are applied automatically by `02-build.ps1`; use `-NoPatch` for stock.
 
 **[→ Full investigation, evidence, and correctness checks](docs/moe-ternary-perf-fix.md)**
@@ -190,6 +296,28 @@ it exempts private forks, which is what this is.
 ---
 
 ## What each script does
+
+```mermaid
+flowchart LR
+    S1["<b>01</b> install-toolchain<br/>MSVC · Ninja · CMake · CUDA 12.8<br/><i>~10 GB</i>"]
+    S2["<b>02</b> build<br/>clone fork · apply patches<br/>detect sm_XX · nvcc<br/><i>~10 min</i>"]
+    S3["<b>03</b> download-model<br/>GGUF from Hugging Face<br/><i>5.45 GB</i>"]
+    S4["<b>04</b> run<br/>chat · server · complete · bench"]
+
+    S1 --> S2 --> S3 --> S4
+    S4 --> W["Web UI :8080"]
+    S4 --> API["OpenAI API /v1"]
+    S4 --> B["llama-bench"]
+
+    P[("patches/<br/>0001 · 0002 · 0003")] -.->|auto-applied| S2
+    HF[("🤗 stamsam/<br/>maple-preview-gguf")] -.-> S3
+
+    style S2 fill:#1d4ed8,stroke:#1e3a8a,color:#fff
+    style W fill:#15803d,stroke:#14532d,color:#fff
+```
+
+Nothing heavy is committed here: the fork, the build and the weights are all
+fetched by the scripts.
 
 | Script | Does | Notes |
 |---|---|---|
@@ -243,6 +371,41 @@ A local model knows nothing after its training cut-off. `mcp/search_server.py` i
 a small MCP server exposing a `web_search` tool, backed by Grok (web + native
 X/Twitter search) or MiniMax. Maple is tool-capable — its chat template has a
 `<tools>` block — so it can drive it.
+
+```mermaid
+flowchart LR
+    U["You"] --> UI["Web UI :8080<br/><i>or</i> research.py"]
+    UI --> S["llama-server<br/>--jinja --ui-mcp-proxy"]
+    S --> M["Maple-Preview<br/>20B-A1B ternary<br/><b>local, on GPU</b>"]
+    M -->|"tool call"| MCP["search_server.py :8181<br/>MCP over HTTP"]
+    MCP --> G["Grok CLI<br/>web + X search"]
+    MCP --> MM["MiniMax API"]
+    G -->|"results + URLs"| M
+    MM -->|"results + URLs"| M
+    M -->|"cited answer"| UI
+
+    style M fill:#15803d,stroke:#14532d,color:#fff
+    style MCP fill:#1d4ed8,stroke:#1e3a8a,color:#fff
+```
+
+The reasoning stays local on your GPU; only the search query leaves the machine.
+
+```mermaid
+sequenceDiagram
+    participant U as You
+    participant L as Maple (local)
+    participant M as MCP server
+    participant G as Grok
+
+    U->>L: "What did deepgrove release in 2026?"
+    L->>L: recognises it needs current data
+    L->>M: tool_call web_search(query)
+    M->>G: search the web
+    G-->>M: summary + source URLs
+    M-->>L: 1505 chars of results
+    L->>L: synthesise with citations
+    L-->>U: answer + sources
+```
 
 ```powershell
 # 1. search server

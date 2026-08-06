@@ -14,7 +14,11 @@ The search itself is delegated to a backend that already has a real search index
   grok     (default)  xAI's Grok CLI -- web + native X/Twitter search
   minimax             MiniMax chat API with web search enabled
 
-Both are metered. Grok measured ~$0.09/search in testing, so this is not free.
+Cost: the Grok CLI reports a `total_cost_usd` per call (~$0.09 in testing), but
+that is an API-equivalent figure printed regardless of billing mode. Signed in
+via OAuth (`auth_mode: oidc`, a subscription seat) it draws against plan quota
+and rate limits, not that dollar amount; only an API-key setup bills per call.
+MiniMax uses MINIMAX_API_KEY and is metered per request.
 
 Usage
 -----

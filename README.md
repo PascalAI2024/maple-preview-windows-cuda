@@ -274,9 +274,15 @@ without configuring anything in a browser. To use search *in* the web UI instead
 start the server with `-McpProxy` and add `http://127.0.0.1:8181/mcp` under
 **MCP Servers**.
 
-Both backends are metered — Grok measured **~$0.09 per search**. Neither port
-should be exposed beyond localhost; llama.cpp documents `--ui-mcp-proxy` as
-unsafe in untrusted environments.
+**On cost:** the Grok CLI prints a `total_cost_usd` per call (~$0.09 in testing),
+but that is an API-equivalent figure it reports regardless of how the account is
+billed. If the CLI is signed in via OAuth (`auth_mode: oidc` in
+`~/.grok/auth.json`, i.e. a subscription seat), searches draw against plan
+quota and rate limits rather than incurring that charge. Only an API-key setup
+bills per call. MiniMax uses `MINIMAX_API_KEY` and *is* metered per request.
+
+Neither port should be exposed beyond localhost; llama.cpp documents
+`--ui-mcp-proxy` as unsafe in untrusted environments.
 
 ## Testing kernel changes
 

@@ -408,13 +408,34 @@ sequenceDiagram
 ```
 
 ```powershell
-# 1. search server
-python mcp/search_server.py --port 8181 --backend grok
+./scripts/05-research-stack.ps1
+```
 
-# 2. model server (--McpProxy lets the browser UI reach MCP servers)
-./scripts/04-run.ps1 -Mode server -McpProxy
+That is the whole setup. Open <http://127.0.0.1:8080> and ask something current —
+search is already wired in, with nothing to configure in the browser.
 
-# 3. ask something it cannot know from training data
+**Why a proxy rather than the UI's MCP panel.** llama-server keeps MCP server
+config in the browser's **IndexedDB**, reachable only through a modal in the web
+UI. There is no server-side flag for it, so that setup cannot be scripted,
+committed, or reproduced on another machine. `mcp/search_proxy.py` sits in front
+of llama-server, passes everything through untouched, and injects the
+`web_search` tool into `/v1/chat/completions` — running the tool loop
+server-side. The browser sees an ordinary chat endpoint; the model gets search.
+
+```mermaid
+flowchart LR
+    B["browser :8080"] --> P["search_proxy.py<br/><i>injects tool, runs loop</i>"]
+    P -->|"everything else<br/>passed through"| L["llama-server :8081"]
+    P -->|"/v1/chat/completions"| L
+    P <-->|"tool calls"| M["search_server.py :8181"]
+    M --> G["Grok / MiniMax"]
+
+    style P fill:#1d4ed8,stroke:#1e3a8a,color:#fff
+```
+
+There is also a CLI path that needs no proxy:
+
+```powershell
 python mcp/research.py "What did deepgrove release in 2026 and how fast is it?"
 ```
 
@@ -432,10 +453,15 @@ These speeds are achieved on-device using a separate runtime (not the CUDA path)
 Sources: https://huggingface.co/deepgrove/maple-preview ...
 ```
 
-`research.py` runs the tool-calling loop from the command line, so it works
-without configuring anything in a browser. To use search *in* the web UI instead,
-start the server with `-McpProxy` and add `http://127.0.0.1:8181/mcp` under
-**MCP Servers**.
+**One thing the proxy has to work around.** Maple does not always emit a
+structured `tool_calls` field — sometimes it writes the Hermes-style
+`<tool_call>{...}</tool_call>` block as plain text, and when it does so inside the
+reasoning channel, llama-server's parser does not lift it out. The request then
+comes back with no tool call *and* no answer, so the user sees a blank reply. The
+proxy salvages those blocks out of the text and executes them anyway, which is
+what turns tool use from intermittent into reliable. It also forces a final
+answer if the model is still searching when it runs out of rounds, for the same
+reason: otherwise the last message is a tool call with empty content.
 
 **On cost:** the Grok CLI prints a `total_cost_usd` per call (~$0.09 in testing),
 but that is an API-equivalent figure it reports regardless of how the account is

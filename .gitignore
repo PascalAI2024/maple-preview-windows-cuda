@@ -13,3 +13,8 @@ build*/
 # Python bytecode
 __pycache__/
 *.py[cod]
+
+# Session-local artifacts from profiling / remote runs
+apply_profile.py
+build-profile.bat
+remote-results/

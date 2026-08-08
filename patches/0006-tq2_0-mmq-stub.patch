@@ -1,0 +1,140 @@
+diff --git a/ggml/src/ggml-cuda/mmq.cu b/ggml/src/ggml-cuda/mmq.cu
+index a3cc503..a7a3153 100644
+--- a/ggml/src/ggml-cuda/mmq.cu
++++ b/ggml/src/ggml-cuda/mmq.cu
+@@ -11,6 +11,16 @@ static void ggml_cuda_mul_mat_q_switch_type(ggml_backend_cuda_context & ctx, con
+         case GGML_TYPE_Q2_0:
+             mul_mat_q_case<GGML_TYPE_Q2_0>(ctx, args, stream);
+             break;
++        case GGML_TYPE_TQ2_0:
++            // Phase 1 stub: wires the dispatch even though should_use_mmq still
++            // returns false for TQ2_0 (see ggml_cuda_should_use_mmq below). This
++            // case is dormant at runtime until Phase 4 enables MMQ for TQ2_0;
++            // keeping it here means the build succeeds and the trait
++            // specialization (mmq_type_traits<...,GGML_TYPE_TQ2_0>) gets
++            // instantiated via the DECL_MMQ_CASE(GGML_TYPE_TQ2_0) in
++            // mmq-instance-tq2_0.cu.
++            mul_mat_q_case<GGML_TYPE_TQ2_0>(ctx, args, stream);
++            break;
+         case GGML_TYPE_Q4_0:
+             mul_mat_q_case<GGML_TYPE_Q4_0>(ctx, args, stream);
+             break;
+@@ -303,6 +313,17 @@ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t
+             mmq_supported = false;
+             break;
+     }
++    // Note (Phase 1): GGML_TYPE_TQ2_0 intentionally falls through to the default
++    // branch above (mmq_supported = false). The trait specialization at
++    // mmq_type_traits<...,GGML_TYPE_TQ2_0> exists, the dispatch in
++    // ggml_cuda_mul_mat_q_switch_type is wired, and the mmq-instance-tq2_0.cu
++    // template instantiation is present -- but should_use_mmq returns false so
++    // the kernel is never invoked. This keeps the build green and the runtime
++    // behaviour unchanged (dequant+cuBLAS path, matching the existing fp16
++    // fallback for tq2_0) until Phase 4 verifies correctness. To enable MMQ
++    // for TQ2_0 in Phase 4, add `case GGML_TYPE_TQ2_0:` to the supported set
++    // above (returning mmq_supported = true) once load_tiles_tq2_0 and
++    // vec_dot_tq2_0_q8_1_dp4a replace the Q2_0 stub in the trait specialization.
+ 
+     if (!mmq_supported) {
+         return false;
+diff --git a/ggml/src/ggml-cuda/mmq.cuh b/ggml/src/ggml-cuda/mmq.cuh
+index 6f38d4f..4231a5b 100644
+--- a/ggml/src/ggml-cuda/mmq.cuh
++++ b/ggml/src/ggml-cuda/mmq.cuh
+@@ -63,6 +63,13 @@ static mmq_q8_1_ds_layout mmq_get_q8_1_ds_layout(const ggml_type type_x) {
+         case GGML_TYPE_Q1_0:
+         case GGML_TYPE_Q2_0:
+             return MMQ_Q8_1_DS_LAYOUT_D4;
++        case GGML_TYPE_TQ2_0:
++            // Phase 1 stub: TQ2_0 has one fp16 scale per block (QK_K=256), mirroring Q2_0's
++            // one-fp16-per-block layout. Reusing Q2_0's MMQ_Q8_1_DS_LAYOUT_D4 here is
++            // intentional -- the tile layout is the same shape; the actual scale arithmetic
++            // is handled inside load_tiles_q2_0. Phase 4 may revisit if the per-tile scale
++            // staging diverges (e.g. for the MMA path).
++            return MMQ_Q8_1_DS_LAYOUT_D4;
+         case GGML_TYPE_Q4_0:
+         case GGML_TYPE_Q4_1:
+             return MMQ_Q8_1_DS_LAYOUT_DS4;
+@@ -194,6 +201,15 @@ static constexpr __host__ __device__ tile_x_sizes mmq_get_dp4a_tile_x_sizes(ggml
+     switch (type) {
+         case GGML_TYPE_Q1_0:    return MMQ_DP4A_TXS_Q8_0;
+         case GGML_TYPE_Q2_0:    return MMQ_DP4A_TXS_Q8_0;
++        case GGML_TYPE_TQ2_0:
++            // Phase 1 stub: TQ2_0 has only `d` (one fp16 per QK_K=256 block), so the
++            // tile needs no `dm`/`sc` slots. Q2_0's MMQ_DP4A_TXS_Q8_0 has the right
++            // shape (qs at mmq_y*MMQ_TILE_NE_K*2 + mmq_y, dm at mmq_y*MMQ_TILE_NE_K*2/QI8_0,
++            // no sc) and the right number of qs slots -- intentionally reusing Q2_0's
++            // load_tiles_q2_0 here means the tile shape matches what it writes. Phase 2
++            // replaces load_tiles_q2_0 with load_tiles_tq2_0; Phase 4 may tighten TXS to
++            // remove the unused dm column.
++            return MMQ_DP4A_TXS_Q8_0;
+         case GGML_TYPE_Q4_0:    return MMQ_DP4A_TXS_Q4_0;
+         case GGML_TYPE_Q4_1:    return MMQ_DP4A_TXS_Q4_1;
+         case GGML_TYPE_Q5_0:    return MMQ_DP4A_TXS_Q8_0;
+@@ -240,6 +256,13 @@ static constexpr __host__ __device__ int mmq_get_mma_tile_x_k(ggml_type type) {
+     switch (type) {
+         case GGML_TYPE_Q1_0:    return MMQ_MMA_TILE_X_K_Q8_0;
+         case GGML_TYPE_Q2_0:    return MMQ_MMA_TILE_X_K_Q8_0;
++        case GGML_TYPE_TQ2_0:
++            // Phase 1 stub: reuse Q2_0's MMA tile (MMQ_MMA_TILE_X_K_Q8_0). The "right"
++            // shape for TQ2_0 is the same as Q2_0 (one fp16 d per block, 2-bit codes)
++            // so this is intentionally not a new tile-size constant. Phase 5 (Turing
++            // MMA for TQ2_0) keeps this case and adapts vec_dot_q8_0_q8_1_mma to emit
++            // signed-byte operands.
++            return MMQ_MMA_TILE_X_K_Q8_0;
+         case GGML_TYPE_Q4_0:    return MMQ_MMA_TILE_X_K_Q8_0;
+         case GGML_TYPE_Q4_1:    return MMQ_MMA_TILE_X_K_Q8_1;
+         case GGML_TYPE_Q5_0:    return MMQ_MMA_TILE_X_K_Q8_0;
+@@ -3357,6 +3380,27 @@ struct mmq_type_traits<mmq_x, mmq_y, need_check, GGML_TYPE_Q2_0> {
+     static constexpr vec_dot_mmq_t    vec_dot_mma  = vec_dot_q8_0_q8_1_mma<mmq_x, mmq_y, MMQ_Q8_1_DS_LAYOUT_D4>;
+     static constexpr vec_dot_mmq_t    vec_dot_dp4a = vec_dot_q8_0_q8_1_dp4a<mmq_x, mmq_y>;
+ };
++template <int mmq_x, int mmq_y, bool need_check>
++struct mmq_type_traits<mmq_x, mmq_y, need_check, GGML_TYPE_TQ2_0> {
++    // Phase 1 stub: deliberately mirror Q2_0 to prove the dispatch wiring. The kernel
++    // will launch and produce wrong output until Phase 2 (load_tiles_tq2_0) and
++    // Phase 3 (vec_dot_tq2_0_q8_1_dp4a) are in. Specifically:
++    //   - load_tiles_q2_0 reads Q2_0 blocks (QK2_0=128) but is handed TQ2_0 blocks
++    //     (QK_K=256) -- the inner loop runs half as many iterations as it should,
++    //     and reads only the first 32 bytes of qs per row.
++    //   - vec_dot_q8_0_q8_1_dp4a assumes signed-byte qs laid out by load_tiles_q2_0;
++    //     the same byte-level shape works for TQ2_0's __vsub4(...,0x01010101)
++    //     decode only if load_tiles emits signed bytes, which the current
++    //     load_tiles_q2_0 happens to do.
++    //   - VDR_TQ2_0_Q8_1_MMQ=4 (matches Q2_0's load_tiles_q2_0 stride). The
++    //     "correct" value is 8 (QK_K=256/32=8 chunks per block); Phase 4 sets it.
++    // Phase 4 also reverts the experimental mmvq.cu:254 `return 1` that disables
++    // MMVQ for TQ2_0 large batches.
++    static constexpr int              vdr          = VDR_TQ2_0_Q8_1_MMQ;
++    static constexpr load_tiles_mmq_t load_tiles   = load_tiles_q2_0<mmq_y, need_check>;
++    static constexpr vec_dot_mmq_t    vec_dot_mma  = vec_dot_q8_0_q8_1_mma<mmq_x, mmq_y, MMQ_Q8_1_DS_LAYOUT_D4>;
++    static constexpr vec_dot_mmq_t    vec_dot_dp4a = vec_dot_q8_0_q8_1_dp4a<mmq_x, mmq_y>;
++};
+ 
+ template <int mmq_x, int mmq_y, bool need_check>
+ struct mmq_type_traits<mmq_x, mmq_y, need_check, GGML_TYPE_Q4_0> {
+diff --git a/ggml/src/ggml-cuda/vecdotq.cuh b/ggml/src/ggml-cuda/vecdotq.cuh
+index 7d4768c..89c6cc6 100644
+--- a/ggml/src/ggml-cuda/vecdotq.cuh
++++ b/ggml/src/ggml-cuda/vecdotq.cuh
+@@ -112,6 +112,9 @@ static __device__ __forceinline__ uint32_t unpack_ksigns(const uint8_t v) {
+ #define VDR_Q2_0_Q8_1_MMVQ 1
+ #define VDR_TQ2_0_Q8_1_MMVQ 1 // one 32-element chunk per vec_dot call (like Q2_0)  // Process one 32-element chunk at a time for parallelism
+ #define VDR_Q2_0_Q8_1_MMQ  4  // Q2_0 has 256 bits (8 ints) per block, 4 32-element chunks
++// Phase 1 stub: TQ2_0 MMQ reuses Q2_0's load_tiles/vec_dot (load_tiles_q2_0 reads 4 chunks per row).
++// The "right" VDR for TQ2_0 is 8 (QK_K=256, 32-element Q8_1 chunks -> 8 per block); Phase 4 sets it.
++#define VDR_TQ2_0_Q8_1_MMQ 4
+ 
+ #define VDR_Q4_0_Q8_1_MMVQ 2
+ #define VDR_Q4_0_Q8_1_MMQ  4
+diff --git a/ggml/src/ggml-cuda/template-instances/mmq-instance-tq2_0.cu b/ggml/src/ggml-cuda/template-instances/mmq-instance-tq2_0.cu
+new file mode 100644
+index 0000000..2780a4d
+--- /dev/null
++++ b/ggml/src/ggml-cuda/template-instances/mmq-instance-tq2_0.cu
+@@ -0,0 +1,5 @@
++// This file has been autogenerated by generate_cu_files.py, do not edit manually.
++
++#include "../mmq.cuh"
++
++DECL_MMQ_CASE(GGML_TYPE_TQ2_0);

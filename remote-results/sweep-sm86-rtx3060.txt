@@ -1,0 +1,259 @@
+================================================================================
+ MAPLE tq2_0 BENCHMARK SWEEP — SUMMARY
+================================================================================
+Machine:           NVIDIA GeForce RTX 3060 (compute capability 8.6, 11907 MiB VRAM)
+Kernel:            llama.cpp build 9ee03ee (cuda: tq2_0 (type 35) full GPU support - dequant, get_rows, mmvq vec_dot) (GGML CUDA backend, sm_86)
+Model:             maple-tq2_0.gguf (5.07 GiB, 20.21 B params, 2.06 bpw ternary)
+Patches applied:   patches 0001-0004 (5 files: ggml-cuda/convert.cu, ggml-cuda/dequantize.cuh, ggml-cuda/mmvq.cu, ggml-cuda/vecdotq.cuh, tests/test-backend-ops.cpp)
+Correctness:       MUL_MAT 31/31 pass, MUL_MAT_ID 72/72 pass (CUDA backend, tq2_0)
+Sweep config:      6 (pp_size, tg_size) combinations × 3 runs = 18 llama-bench invocations
+Run timestamp:     2026-08-08 04:57:10 UTC
+
+HEADLINES
+  • Best prompt-processing throughput: 1454.83 t/s @ pp=4096, tg=128
+    (highest pp t/s; throughput stabilizes around pp=2048+ at ~1450 t/s)
+  • Best text-generation throughput:   235.15 t/s @ pp=512, tg=128
+    (tg t/s is essentially flat across all 6 combos, ~234-235 t/s)
+  • Latency breakdown (median across 3 runs):
+      - pp512,tg128:   pp=1396.06 t/s,  tg=235.15 t/s
+      - pp1024,tg128:  pp=1447.84 t/s,  tg=234.53 t/s
+      - pp2048,tg128:  pp=1445.87 t/s,  tg=234.42 t/s
+      - pp4096,tg128:  pp=1454.83 t/s,  tg=234.23 t/s
+      - pp512,tg256:   pp=1430.26 t/s,  tg=234.71 t/s
+      - pp512,tg512:   pp=1430.13 t/s,  tg=231.93 t/s
+  • Observation: pp throughput scales with prompt size (1396 → 1455 t/s from 512→4096),
+    saturating near pp=2048. tg throughput is largely insensitive to both pp and tg size
+    (range: 231.93-235.15 t/s, ~1.4% spread), confirming tq2_0 ternary GEMV is well-tuned.
+
+================================================================================
+ RAW SWEEP DATA FOLLOWS
+================================================================================
+
+================================================================================
+ MAPLE tq2_0 BENCHMARK SWEEP
+ Date: 2026-08-08 04:52:34 UTC
+================================================================================
+
+################################################################################
+# Combination: pp=512, tg=128  (3 runs)
+################################################################################
+
+--- run 1/3 ---
+ggml_cuda_init: found 1 CUDA devices (Total VRAM: 11907 MiB):
+  Device 0: NVIDIA GeForce RTX 3060, compute capability 8.6, VMM: yes, VRAM: 11907 MiB
+| model                          |       size |     params | backend    | ngl |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | --: | --------------: | -------------------: |
+| maple ?B TQ2_0 - 2.06 bpw ternary |   5.07 GiB |    20.21 B | CUDA       |  99 |           pp512 |      1432.93 ± 19.08 |
+| maple ?B TQ2_0 - 2.06 bpw ternary |   5.07 GiB |    20.21 B | CUDA       |  99 |           tg128 |        235.15 ± 1.20 |
+
+build: 9ee03ee (1)
+
+--- run 2/3 ---
+ggml_cuda_init: found 1 CUDA devices (Total VRAM: 11907 MiB):
+  Device 0: NVIDIA GeForce RTX 3060, compute capability 8.6, VMM: yes, VRAM: 11907 MiB
+| model                          |       size |     params | backend    | ngl |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | --: | --------------: | -------------------: |
+| maple ?B TQ2_0 - 2.06 bpw ternary |   5.07 GiB |    20.21 B | CUDA       |  99 |           pp512 |      1396.06 ± 13.56 |
+| maple ?B TQ2_0 - 2.06 bpw ternary |   5.07 GiB |    20.21 B | CUDA       |  99 |           tg128 |        235.26 ± 1.19 |
+
+build: 9ee03ee (1)
+
+--- run 3/3 ---
+ggml_cuda_init: found 1 CUDA devices (Total VRAM: 11907 MiB):
+  Device 0: NVIDIA GeForce RTX 3060, compute capability 8.6, VMM: yes, VRAM: 11907 MiB
+| model                          |       size |     params | backend    | ngl |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | --: | --------------: | -------------------: |
+| maple ?B TQ2_0 - 2.06 bpw ternary |   5.07 GiB |    20.21 B | CUDA       |  99 |           pp512 |      1395.49 ± 11.80 |
+| maple ?B TQ2_0 - 2.06 bpw ternary |   5.07 GiB |    20.21 B | CUDA       |  99 |           tg128 |        234.75 ± 0.99 |
+
+build: 9ee03ee (1)
+################################################################################
+# Combination: pp=1024, tg=128  (3 runs)
+################################################################################
+
+--- run 1/3 ---
+ggml_cuda_init: found 1 CUDA devices (Total VRAM: 11907 MiB):
+  Device 0: NVIDIA GeForce RTX 3060, compute capability 8.6, VMM: yes, VRAM: 11907 MiB
+| model                          |       size |     params | backend    | ngl |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | --: | --------------: | -------------------: |
+| maple ?B TQ2_0 - 2.06 bpw ternary |   5.07 GiB |    20.21 B | CUDA       |  99 |          pp1024 |      1410.64 ± 34.48 |
+| maple ?B TQ2_0 - 2.06 bpw ternary |   5.07 GiB |    20.21 B | CUDA       |  99 |           tg128 |        234.58 ± 1.07 |
+
+build: 9ee03ee (1)
+
+--- run 2/3 ---
+ggml_cuda_init: found 1 CUDA devices (Total VRAM: 11907 MiB):
+  Device 0: NVIDIA GeForce RTX 3060, compute capability 8.6, VMM: yes, VRAM: 11907 MiB
+| model                          |       size |     params | backend    | ngl |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | --: | --------------: | -------------------: |
+| maple ?B TQ2_0 - 2.06 bpw ternary |   5.07 GiB |    20.21 B | CUDA       |  99 |          pp1024 |      1447.84 ± 12.00 |
+| maple ?B TQ2_0 - 2.06 bpw ternary |   5.07 GiB |    20.21 B | CUDA       |  99 |           tg128 |        234.51 ± 1.09 |
+
+build: 9ee03ee (1)
+
+--- run 3/3 ---
+ggml_cuda_init: found 1 CUDA devices (Total VRAM: 11907 MiB):
+  Device 0: NVIDIA GeForce RTX 3060, compute capability 8.6, VMM: yes, VRAM: 11907 MiB
+| model                          |       size |     params | backend    | ngl |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | --: | --------------: | -------------------: |
+| maple ?B TQ2_0 - 2.06 bpw ternary |   5.07 GiB |    20.21 B | CUDA       |  99 |          pp1024 |      1452.24 ± 12.36 |
+| maple ?B TQ2_0 - 2.06 bpw ternary |   5.07 GiB |    20.21 B | CUDA       |  99 |           tg128 |        234.53 ± 1.23 |
+
+build: 9ee03ee (1)
+################################################################################
+# Combination: pp=2048, tg=128  (3 runs)
+################################################################################
+
+--- run 1/3 ---
+ggml_cuda_init: found 1 CUDA devices (Total VRAM: 11907 MiB):
+  Device 0: NVIDIA GeForce RTX 3060, compute capability 8.6, VMM: yes, VRAM: 11907 MiB
+| model                          |       size |     params | backend    | ngl |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | --: | --------------: | -------------------: |
+| maple ?B TQ2_0 - 2.06 bpw ternary |   5.07 GiB |    20.21 B | CUDA       |  99 |          pp2048 |      1445.87 ± 11.33 |
+| maple ?B TQ2_0 - 2.06 bpw ternary |   5.07 GiB |    20.21 B | CUDA       |  99 |           tg128 |        234.42 ± 1.19 |
+
+build: 9ee03ee (1)
+
+--- run 2/3 ---
+ggml_cuda_init: found 1 CUDA devices (Total VRAM: 11907 MiB):
+  Device 0: NVIDIA GeForce RTX 3060, compute capability 8.6, VMM: yes, VRAM: 11907 MiB
+| model                          |       size |     params | backend    | ngl |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | --: | --------------: | -------------------: |
+| maple ?B TQ2_0 - 2.06 bpw ternary |   5.07 GiB |    20.21 B | CUDA       |  99 |          pp2048 |      1446.14 ± 11.87 |
+| maple ?B TQ2_0 - 2.06 bpw ternary |   5.07 GiB |    20.21 B | CUDA       |  99 |           tg128 |        234.19 ± 1.16 |
+
+build: 9ee03ee (1)
+
+--- run 3/3 ---
+ggml_cuda_init: found 1 CUDA devices (Total VRAM: 11907 MiB):
+  Device 0: NVIDIA GeForce RTX 3060, compute capability 8.6, VMM: yes, VRAM: 11907 MiB
+| model                          |       size |     params | backend    | ngl |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | --: | --------------: | -------------------: |
+| maple ?B TQ2_0 - 2.06 bpw ternary |   5.07 GiB |    20.21 B | CUDA       |  99 |          pp2048 |       1443.87 ± 9.97 |
+| maple ?B TQ2_0 - 2.06 bpw ternary |   5.07 GiB |    20.21 B | CUDA       |  99 |           tg128 |        234.42 ± 1.22 |
+
+build: 9ee03ee (1)
+################################################################################
+# Combination: pp=4096, tg=128  (3 runs)
+################################################################################
+
+--- run 1/3 ---
+ggml_cuda_init: found 1 CUDA devices (Total VRAM: 11907 MiB):
+  Device 0: NVIDIA GeForce RTX 3060, compute capability 8.6, VMM: yes, VRAM: 11907 MiB
+| model                          |       size |     params | backend    | ngl |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | --: | --------------: | -------------------: |
+| maple ?B TQ2_0 - 2.06 bpw ternary |   5.07 GiB |    20.21 B | CUDA       |  99 |          pp4096 |      1465.08 ± 19.78 |
+| maple ?B TQ2_0 - 2.06 bpw ternary |   5.07 GiB |    20.21 B | CUDA       |  99 |           tg128 |        234.23 ± 1.27 |
+
+build: 9ee03ee (1)
+
+--- run 2/3 ---
+ggml_cuda_init: found 1 CUDA devices (Total VRAM: 11907 MiB):
+  Device 0: NVIDIA GeForce RTX 3060, compute capability 8.6, VMM: yes, VRAM: 11907 MiB
+| model                          |       size |     params | backend    | ngl |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | --: | --------------: | -------------------: |
+| maple ?B TQ2_0 - 2.06 bpw ternary |   5.07 GiB |    20.21 B | CUDA       |  99 |          pp4096 |      1444.03 ± 26.57 |
+| maple ?B TQ2_0 - 2.06 bpw ternary |   5.07 GiB |    20.21 B | CUDA       |  99 |           tg128 |        234.39 ± 1.17 |
+
+build: 9ee03ee (1)
+
+--- run 3/3 ---
+ggml_cuda_init: found 1 CUDA devices (Total VRAM: 11907 MiB):
+  Device 0: NVIDIA GeForce RTX 3060, compute capability 8.6, VMM: yes, VRAM: 11907 MiB
+| model                          |       size |     params | backend    | ngl |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | --: | --------------: | -------------------: |
+| maple ?B TQ2_0 - 2.06 bpw ternary |   5.07 GiB |    20.21 B | CUDA       |  99 |          pp4096 |       1454.83 ± 7.04 |
+| maple ?B TQ2_0 - 2.06 bpw ternary |   5.07 GiB |    20.21 B | CUDA       |  99 |           tg128 |        233.77 ± 0.96 |
+
+build: 9ee03ee (1)
+################################################################################
+# Combination: pp=512, tg=256  (3 runs)
+################################################################################
+
+--- run 1/3 ---
+ggml_cuda_init: found 1 CUDA devices (Total VRAM: 11907 MiB):
+  Device 0: NVIDIA GeForce RTX 3060, compute capability 8.6, VMM: yes, VRAM: 11907 MiB
+| model                          |       size |     params | backend    | ngl |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | --: | --------------: | -------------------: |
+| maple ?B TQ2_0 - 2.06 bpw ternary |   5.07 GiB |    20.21 B | CUDA       |  99 |           pp512 |      1430.26 ± 15.88 |
+| maple ?B TQ2_0 - 2.06 bpw ternary |   5.07 GiB |    20.21 B | CUDA       |  99 |           tg256 |        234.78 ± 0.52 |
+
+build: 9ee03ee (1)
+
+--- run 2/3 ---
+ggml_cuda_init: found 1 CUDA devices (Total VRAM: 11907 MiB):
+  Device 0: NVIDIA GeForce RTX 3060, compute capability 8.6, VMM: yes, VRAM: 11907 MiB
+| model                          |       size |     params | backend    | ngl |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | --: | --------------: | -------------------: |
+| maple ?B TQ2_0 - 2.06 bpw ternary |   5.07 GiB |    20.21 B | CUDA       |  99 |           pp512 |      1395.13 ± 11.99 |
+| maple ?B TQ2_0 - 2.06 bpw ternary |   5.07 GiB |    20.21 B | CUDA       |  99 |           tg256 |        234.61 ± 0.58 |
+
+build: 9ee03ee (1)
+
+--- run 3/3 ---
+ggml_cuda_init: found 1 CUDA devices (Total VRAM: 11907 MiB):
+  Device 0: NVIDIA GeForce RTX 3060, compute capability 8.6, VMM: yes, VRAM: 11907 MiB
+| model                          |       size |     params | backend    | ngl |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | --: | --------------: | -------------------: |
+| maple ?B TQ2_0 - 2.06 bpw ternary |   5.07 GiB |    20.21 B | CUDA       |  99 |           pp512 |      1431.00 ± 13.16 |
+| maple ?B TQ2_0 - 2.06 bpw ternary |   5.07 GiB |    20.21 B | CUDA       |  99 |           tg256 |        234.71 ± 0.58 |
+
+build: 9ee03ee (1)
+################################################################################
+# Combination: pp=512, tg=512  (3 runs)
+################################################################################
+
+--- run 1/3 ---
+ggml_cuda_init: found 1 CUDA devices (Total VRAM: 11907 MiB):
+  Device 0: NVIDIA GeForce RTX 3060, compute capability 8.6, VMM: yes, VRAM: 11907 MiB
+| model                          |       size |     params | backend    | ngl |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | --: | --------------: | -------------------: |
+| maple ?B TQ2_0 - 2.06 bpw ternary |   5.07 GiB |    20.21 B | CUDA       |  99 |           pp512 |      1431.18 ± 12.59 |
+| maple ?B TQ2_0 - 2.06 bpw ternary |   5.07 GiB |    20.21 B | CUDA       |  99 |           tg512 |        231.93 ± 0.06 |
+
+build: 9ee03ee (1)
+
+--- run 2/3 ---
+ggml_cuda_init: found 1 CUDA devices (Total VRAM: 11907 MiB):
+  Device 0: NVIDIA GeForce RTX 3060, compute capability 8.6, VMM: yes, VRAM: 11907 MiB
+| model                          |       size |     params | backend    | ngl |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | --: | --------------: | -------------------: |
+| maple ?B TQ2_0 - 2.06 bpw ternary |   5.07 GiB |    20.21 B | CUDA       |  99 |           pp512 |      1422.84 ± 13.80 |
+| maple ?B TQ2_0 - 2.06 bpw ternary |   5.07 GiB |    20.21 B | CUDA       |  99 |           tg512 |        231.93 ± 0.05 |
+
+build: 9ee03ee (1)
+
+--- run 3/3 ---
+ggml_cuda_init: found 1 CUDA devices (Total VRAM: 11907 MiB):
+  Device 0: NVIDIA GeForce RTX 3060, compute capability 8.6, VMM: yes, VRAM: 11907 MiB
+| model                          |       size |     params | backend    | ngl |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | --: | --------------: | -------------------: |
+| maple ?B TQ2_0 - 2.06 bpw ternary |   5.07 GiB |    20.21 B | CUDA       |  99 |           pp512 |      1430.13 ± 15.21 |
+| maple ?B TQ2_0 - 2.06 bpw ternary |   5.07 GiB |    20.21 B | CUDA       |  99 |           tg512 |        231.95 ± 0.11 |
+
+build: 9ee03ee (1)
+
+================================================================================
+ PARSED RESULTS (median t/s across 3 runs)
+================================================================================
+
+pp_size         tg_size         pp_t/s          tg_t/s         
+----------------------------------------------------------------
+512             128             1396.06         235.15         
+512             256             1430.26         234.71         
+512             512             1430.13         231.93         
+1024            128             1447.84         234.53         
+2048            128             1445.87         234.42         
+4096            128             1454.83         234.23         
+
+BEST_PP=4096 (tg=128): pp_t/s=1454.83
+BEST_TG=512 (tg=128): tg_t/s=235.15
+
+================================================================================
+ HEADLINE NUMBERS
+================================================================================
+
+BEST_PP=4096 (tg=128): pp_t/s=1454.83
+BEST_TG=512 (tg=128): tg_t/s=235.15
+
+Total bench runs: 18 (6 combinations × 3 runs)

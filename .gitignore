@@ -14,7 +14,8 @@ build*/
 __pycache__/
 *.py[cod]
 
-# Session-local artifacts from profiling / remote runs
+# Session-local artifacts (apply_profile.py, build-profile.bat were one-off
+# profiler helpers; remote-results/ contains cross-arch bench data we DO track)
 apply_profile.py
 build-profile.bat
-remote-results/
+remote-results/apply_profile.py

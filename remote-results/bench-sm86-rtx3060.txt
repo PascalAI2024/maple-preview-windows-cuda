@@ -1,0 +1,32 @@
+ggml_cuda_init: found 1 CUDA devices (Total VRAM: 11907 MiB):
+  Device 0: NVIDIA GeForce RTX 3060, compute capability 8.6, VMM: yes, VRAM: 11907 MiB
+| model                          |       size |     params | backend    | ngl |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | --: | --------------: | -------------------: |
+| maple ?B TQ2_0 - 2.06 bpw ternary |   5.07 GiB |    20.21 B | CUDA       |  99 |           pp512 |      1429.35 ± 14.19 |
+| maple ?B TQ2_0 - 2.06 bpw ternary |   5.07 GiB |    20.21 B | CUDA       |  99 |           tg128 |        235.09 ± 0.95 |
+
+build: 9ee03ee (1)
+ggml_cuda_init: found 1 CUDA devices (Total VRAM: 11907 MiB):
+  Device 0: NVIDIA GeForce RTX 3060, compute capability 8.6, VMM: yes, VRAM: 11907 MiB
+| model                          |       size |     params | backend    | ngl |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | --: | --------------: | -------------------: |
+| maple ?B TQ2_0 - 2.06 bpw ternary |   5.07 GiB |    20.21 B | CUDA       |  99 |           pp512 |      1433.35 ± 13.50 |
+| maple ?B TQ2_0 - 2.06 bpw ternary |   5.07 GiB |    20.21 B | CUDA       |  99 |           tg128 |        234.78 ± 0.95 |
+
+build: 9ee03ee (1)
+ggml_cuda_init: found 1 CUDA devices (Total VRAM: 11907 MiB):
+  Device 0: NVIDIA GeForce RTX 3060, compute capability 8.6, VMM: yes, VRAM: 11907 MiB
+| model                          |       size |     params | backend    | ngl |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | --: | --------------: | -------------------: |
+| maple ?B TQ2_0 - 2.06 bpw ternary |   5.07 GiB |    20.21 B | CUDA       |  99 |           pp512 |      1441.77 ± 14.54 |
+| maple ?B TQ2_0 - 2.06 bpw ternary |   5.07 GiB |    20.21 B | CUDA       |  99 |           tg128 |        234.69 ± 1.02 |
+
+build: 9ee03ee (1)
+ggml_cuda_init: found 1 CUDA devices (Total VRAM: 11907 MiB):
+  Device 0: NVIDIA GeForce RTX 3060, compute capability 8.6, VMM: yes, VRAM: 11907 MiB
+| model                          |       size |     params | backend    | ngl |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | --: | --------------: | -------------------: |
+| maple ?B TQ2_0 - 2.06 bpw ternary |   5.07 GiB |    20.21 B | CUDA       |  99 |           pp512 |      1442.17 ± 15.55 |
+| maple ?B TQ2_0 - 2.06 bpw ternary |   5.07 GiB |    20.21 B | CUDA       |  99 |           tg128 |        234.75 ± 1.06 |
+
+build: 9ee03ee (1)

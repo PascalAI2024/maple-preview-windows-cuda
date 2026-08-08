@@ -1,0 +1,9 @@
+| maple ?B TQ2_0 - 2.06 bpw ternary |   5.07 GiB |    20.21 B | CUDA       |  99 |           pp512 |      1426.58 ± 13.66 |
+| maple ?B TQ2_0 - 2.06 bpw ternary |   5.07 GiB |    20.21 B | CUDA       |  99 |           tg128 |        232.44 ± 0.79 |
+
+| maple ?B TQ2_0 - 2.06 bpw ternary |   5.07 GiB |    20.21 B | CUDA       |  99 |           pp512 |      1424.27 ± 12.99 |
+| maple ?B TQ2_0 - 2.06 bpw ternary |   5.07 GiB |    20.21 B | CUDA       |  99 |           tg128 |        232.61 ± 1.03 |
+
+| maple ?B TQ2_0 - 2.06 bpw ternary |   5.07 GiB |    20.21 B | CUDA       |  99 |           pp512 |      1420.67 ± 11.56 |
+| maple ?B TQ2_0 - 2.06 bpw ternary |   5.07 GiB |    20.21 B | CUDA       |  99 |           tg128 |        232.56 ± 1.05 |
+

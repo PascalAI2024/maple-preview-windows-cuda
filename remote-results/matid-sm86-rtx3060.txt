@@ -1,0 +1,86 @@
+ggml_cuda_init: found 1 CUDA devices (Total VRAM: 11907 MiB):
+  Device 0: NVIDIA GeForce RTX 3060, compute capability 8.6, VMM: yes, VRAM: 11907 MiB
+Testing 2 devices
+
+Backend 1/2: CUDA0
+  Device description: NVIDIA GeForce RTX 3060
+  Device memory: 11907 MB (11794 MB free)
+
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=4,n_used=1,b=0,m=512,n=1,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=4,n_used=1,b=0,m=512,n=4,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=4,n_used=1,b=0,m=512,n=5,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=4,n_used=1,b=0,m=512,n=17,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=4,n_used=1,b=0,m=512,n=32,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=4,n_used=1,b=0,m=512,n=129,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=4,n_used=1,b=1,m=512,n=1,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=4,n_used=1,b=1,m=512,n=4,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=4,n_used=1,b=1,m=512,n=5,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=4,n_used=1,b=1,m=512,n=17,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=4,n_used=1,b=1,m=512,n=32,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=4,n_used=1,b=1,m=512,n=129,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=4,n_used=2,b=0,m=512,n=1,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=4,n_used=2,b=0,m=512,n=4,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=4,n_used=2,b=0,m=512,n=5,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=4,n_used=2,b=0,m=512,n=17,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=4,n_used=2,b=0,m=512,n=32,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=4,n_used=2,b=0,m=512,n=129,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=4,n_used=2,b=1,m=512,n=1,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=4,n_used=2,b=1,m=512,n=4,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=4,n_used=2,b=1,m=512,n=5,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=4,n_used=2,b=1,m=512,n=17,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=4,n_used=2,b=1,m=512,n=32,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=4,n_used=2,b=1,m=512,n=129,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=4,n_used=4,b=0,m=512,n=1,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=4,n_used=4,b=0,m=512,n=4,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=4,n_used=4,b=0,m=512,n=5,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=4,n_used=4,b=0,m=512,n=17,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=4,n_used=4,b=0,m=512,n=32,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=4,n_used=4,b=0,m=512,n=129,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=4,n_used=4,b=1,m=512,n=1,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=4,n_used=4,b=1,m=512,n=4,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=4,n_used=4,b=1,m=512,n=5,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=4,n_used=4,b=1,m=512,n=17,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=4,n_used=4,b=1,m=512,n=32,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=4,n_used=4,b=1,m=512,n=129,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=8,n_used=1,b=0,m=512,n=1,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=8,n_used=1,b=0,m=512,n=4,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=8,n_used=1,b=0,m=512,n=5,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=8,n_used=1,b=0,m=512,n=17,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=8,n_used=1,b=0,m=512,n=32,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=8,n_used=1,b=0,m=512,n=129,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=8,n_used=1,b=1,m=512,n=1,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=8,n_used=1,b=1,m=512,n=4,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=8,n_used=1,b=1,m=512,n=5,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=8,n_used=1,b=1,m=512,n=17,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=8,n_used=1,b=1,m=512,n=32,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=8,n_used=1,b=1,m=512,n=129,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=8,n_used=2,b=0,m=512,n=1,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=8,n_used=2,b=0,m=512,n=4,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=8,n_used=2,b=0,m=512,n=5,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=8,n_used=2,b=0,m=512,n=17,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=8,n_used=2,b=0,m=512,n=32,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=8,n_used=2,b=0,m=512,n=129,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=8,n_used=2,b=1,m=512,n=1,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=8,n_used=2,b=1,m=512,n=4,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=8,n_used=2,b=1,m=512,n=5,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=8,n_used=2,b=1,m=512,n=17,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=8,n_used=2,b=1,m=512,n=32,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=8,n_used=2,b=1,m=512,n=129,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=8,n_used=4,b=0,m=512,n=1,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=8,n_used=4,b=0,m=512,n=4,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=8,n_used=4,b=0,m=512,n=5,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=8,n_used=4,b=0,m=512,n=17,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=8,n_used=4,b=0,m=512,n=32,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=8,n_used=4,b=0,m=512,n=129,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=8,n_used=4,b=1,m=512,n=1,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=8,n_used=4,b=1,m=512,n=4,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=8,n_used=4,b=1,m=512,n=5,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=8,n_used=4,b=1,m=512,n=17,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=8,n_used=4,b=1,m=512,n=32,k=256): [1;32mOK[0m
+  MUL_MAT_ID(type_a=tq2_0,type_b=f32,n_mats=8,n_used=4,b=1,m=512,n=129,k=256): [1;32mOK[0m
+  72/72 tests passed
+  Backend CUDA0: [1;32mOK[0m
+Backend 2/2: CPU
+  Skipping CPU backend
+2/2 backends passed
+[1;32mOK[0m

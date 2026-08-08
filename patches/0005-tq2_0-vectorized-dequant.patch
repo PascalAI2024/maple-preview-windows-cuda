@@ -1,0 +1,135 @@
+diff --git a/ggml/src/ggml-cuda/convert.cu b/ggml/src/ggml-cuda/convert.cu
+--- a/ggml/src/ggml-cuda/convert.cu
++++ b/ggml/src/ggml-cuda/convert.cu
+@@ -138,52 +138,86 @@ static __global__ void dequantize_block_q4_1(const void * __restrict__ vx, dst
+ // Ternary dequant (QK_K=256 per block, one fp16 scale, 2-bit codes):
+ //   element e -> byte = 32*(e/128) + (e%32), lane = (e/32)%4
+ //   decode is (c - 1) * d. With c in {0,1,2,3} this gives {-d, 0, +d, +2d}.
+ //   In practice the quantizer produces only {-d, 0, +d} for ternary weights,
+ //   and +2d only for saturated values, but matching the CPU reference is what
+ //   the kernel has to do.
+-// 32 threads/block, each handles 8 elements (one byte in each half) -- 4x fewer
+-// threads than the generic template, more work per thread (better register
+-// reuse for `d`, more ILP), and 8 coalesced fp32 writes per warp.
+-template<typename dst_t>
+-static __global__ void dequantize_block_tq2_0(const void * __restrict__ vx, dst_t * __restrict__ yy, int nb) {
+-    const int64_t i   = blockIdx.x;
+-    const int64_t tid = threadIdx.x;
+-
+-    if (i >= nb) {
+-        return;
+-    }
+-
+-    // 32 threads, one per byte in each half. Thread t reads qs[t] and qs[t+32].
+-    // Outputs: {t, t+32, t+64, t+96} from first half, {t+128, t+160, t+192, t+224}
+-    // from second half. Within a warp each offset writes 32 contiguous fp32s ->
+-    // coalesced.
+-    const block_tq2_0 * x = (const block_tq2_0 *) vx + i;
+-    const float d = __half2float(x->d);
+-
+-    const uint8_t q0 = x->qs[tid];
+-    const uint8_t q1 = x->qs[tid + 32];
+-
+-    dst_t * y = yy + 256*i + tid;
+-
+-    // Decode (c - 1) * d, matching the CPU dequantize_row_tq2_0 in
+-    // ggml-quants.c. Equivalent to (c * d) - d.
+-    const int c0_0 = q0 & 0x3;
+-    const int c1_0 = q1 & 0x3;
+-    y[  0] = ggml_cuda_cast<dst_t>(c0_0 * d - d);
+-    y[128] = ggml_cuda_cast<dst_t>(c1_0 * d - d);
+-
+-    const int c0_1 = (q0 >> 2) & 0x3;
+-    const int c1_1 = (q1 >> 2) & 0x3;
+-    y[ 32] = ggml_cuda_cast<dst_t>(c0_1 * d - d);
+-    y[160] = ggml_cuda_cast<dst_t>(c1_1 * d - d);
+-
+-    const int c0_2 = (q0 >> 4) & 0x3;
+-    const int c1_2 = (q1 >> 4) & 0x3;
+-    y[ 64] = ggml_cuda_cast<dst_t>(c0_2 * d - d);
+-    y[192] = ggml_cuda_cast<dst_t>(c1_2 * d - d);
+-
+-    const int c0_3 = (q0 >> 6) & 0x3;
+-    const int c1_3 = (q1 >> 6) & 0x3;
+-    y[ 96] = ggml_cuda_cast<dst_t>(c0_3 * d - d);
+-    y[224] = ggml_cuda_cast<dst_t>(c1_3 * d - d);
++// Vectorized over the byte-at-a-time patch 0004 kernel: 32 threads/block, each
++// reads 1 uint16_t (qs[2*tid..2*tid+1], 2 contiguous bytes) -> 8 codes ->
++// 8 fp32 outputs per thread. Threads 0..15 cover first half (bytes 0..31),
++// threads 16..31 cover second half (bytes 32..63). Each adjacent-byte/lane
++// pair (byte 2*tid lane l, byte 2*tid+1 lane l) is contiguous in y, so the
++// 8 fp32 stores of patch 0004 collapse to 4 vectorized float2/half2 stores
++// (one per lane). Per-instruction warp coalescing: 16 threads in each half
++// write a contiguous 32-fp32 region -> 1 cache-line transaction per half
++// per instruction. 4 instructions * 2 cache lines = 8 cache lines per
++// kernel (same as patch 0004) but with 4 store instructions instead of 8,
++// and 1 vectorized load instead of 2 byte loads.
++template<typename dst_t>
++static __global__ void dequantize_block_tq2_0(const void * __restrict__ vx, dst_t * __restrict__ yy, int nb) {
++    const int64_t i   = blockIdx.x;
++    const int64_t tid = threadIdx.x;
++
++    if (i >= nb) {
++        return;
++    }
++
++    const block_tq2_0 * x = (const block_tq2_0 *) vx + i;
++    const float d = __half2float(x->d);
++
++    // Single 16-bit vectorized load: low byte = qs[2*tid], high byte = qs[2*tid+1].
++    // qs is at offset 0 of block_tq2_0 (whose alignment is 2 from ggml_half d)
++    // and 2*tid is even, so the access is naturally 2-byte aligned for uint16_t.
++    const uint16_t q = *reinterpret_cast<const uint16_t *>(&x->qs[2 * tid]);
++
++    // Decode (c - 1) * d, matching the CPU dequantize_row_tq2_0 in
++    // ggml-quants.c. Equivalent to (c * d) - d. 8 codes: low byte lanes
++    // 0..3, high byte lanes 0..3.
++    const float v00 = ((q      ) & 0x3) * d - d;  // byte 2*tid,   lane 0
++    const float v01 = ((q >>  2) & 0x3) * d - d;  // byte 2*tid,   lane 1
++    const float v02 = ((q >>  4) & 0x3) * d - d;  // byte 2*tid,   lane 2
++    const float v03 = ((q >>  6) & 0x3) * d - d;  // byte 2*tid,   lane 3
++    const float v10 = ((q >>  8) & 0x3) * d - d;  // byte 2*tid+1, lane 0
++    const float v11 = ((q >> 10) & 0x3) * d - d;  // byte 2*tid+1, lane 1
++    const float v12 = ((q >> 12) & 0x3) * d - d;  // byte 2*tid+1, lane 2
++    const float v13 = ((q >> 14) & 0x3) * d - d;  // byte 2*tid+1, lane 3
++
++    // Per-thread output base. For lane l in 0..3, thread t writes the
++    // contiguous fp32 pair (y[2*tid + l*32], y[2*tid+1 + l*32]) -- the first
++    // entry is byte 2*tid lane l, the second is byte 2*tid+1 lane l. m =
++    // (2*tid) & 31 keeps the byte-in-half index (0, 2, ..., 30); half_off is
++    // 0 for first half, 128 for second half.
++    const int m        = (2 * tid) & 31;
++    const int half_off = ((2 * tid) >> 5) * 128;
++
++    dst_t * y = yy + 256 * i + half_off + m;
++
++    // 4 vectorized stores per thread: each emits a 2-fp32 pair as float2
++    // (8-byte aligned since m is even and l*32 is a multiple of 32) or
++    // half2 (4-byte aligned). Warp coalescing: 16 threads in each half
++    // write a contiguous 32-fp32 region -> 1 cache-line transaction per
++    // half per instruction, so 4 instructions * 2 cache lines = 8 cache
++    // lines per kernel (same as patch 0004) but with 4 store instructions
++    // instead of 8.
++    if constexpr (std::is_same_v<dst_t, float>) {
++        *reinterpret_cast<float2 *>(&y[0 * 32]) = make_float2(v00, v10);
++        *reinterpret_cast<float2 *>(&y[1 * 32]) = make_float2(v01, v11);
++        *reinterpret_cast<float2 *>(&y[2 * 32]) = make_float2(v02, v12);
++        *reinterpret_cast<float2 *>(&y[3 * 32]) = make_float2(v03, v13);
++    } else if constexpr (std::is_same_v<dst_t, half>) {
++        *reinterpret_cast<half2 *>(&y[0 * 32]) = __float22half2_rn(make_float2(v00, v10));
++        *reinterpret_cast<half2 *>(&y[1 * 32]) = __float22half2_rn(make_float2(v01, v11));
++        *reinterpret_cast<half2 *>(&y[2 * 32]) = __float22half2_rn(make_float2(v02, v12));
++        *reinterpret_cast<half2 *>(&y[3 * 32]) = __float22half2_rn(make_float2(v03, v13));
++    } else {
++        // Fallback for any other dst_t: 8 separate stores (same shape as
++        // patch 0004, but with the 16-bit vectorized load kept).
++        y[0 * 32    ] = ggml_cuda_cast<dst_t>(v00);
++        y[0 * 32 + 1] = ggml_cuda_cast<dst_t>(v10);
++        y[1 * 32    ] = ggml_cuda_cast<dst_t>(v01);
++        y[1 * 32 + 1] = ggml_cuda_cast<dst_t>(v11);
++        y[2 * 32    ] = ggml_cuda_cast<dst_t>(v02);
++        y[2 * 32 + 1] = ggml_cuda_cast<dst_t>(v12);
++        y[3 * 32    ] = ggml_cuda_cast<dst_t>(v03);
++        y[3 * 32 + 1] = ggml_cuda_cast<dst_t>(v13);
++    }
+ }

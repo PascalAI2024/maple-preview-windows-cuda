@@ -9,6 +9,51 @@ No weights are committed here. Everything is pulled from Hugging Face at setup
 time.
 
 ---
+## Headline
+
+llama.cpp cannot load the deepgrove/maple-preview ternary model: it lacks both the `maple` architecture and the `tq2_0` tensor type (GGML type 35). Even when the architecture is forked in, the original CUDA kernels for ternary weights were 7× slower than the q4_k_m reference on consumer hardware. This repo builds the working fork on Windows and ships four CUDA patches that close the generation gap past q4_k_m in **44% of the memory**.
+
+### TL;DR
+
+- **Generation (tg128)**: 52 → 369 t/s on RTX 4080 SUPER — past `q4_k_m`'s 298 t/s
+- **Prompt processing (pp512)**: 1256 → 1531 t/s — still 5× behind `q4_k_m`; no MMQ kernel yet
+- **Memory**: 7.3 GB vs `q4_k_m`'s 12.3 GB — the ternary argument, validated on hardware
+- **Correctness**: 103/103 unit tests against CPU reference via `test-backend-ops`
+
+### Patches
+
+Six attempts, four landed. Patches 0001-0004 are auto-applied by `02-build.ps1`; pass `-NoPatch` for stock. Patches 0005 and 0006 are recorded for the record: one a dead end, one still cooking.
+
+|Patch|What|Where|Impact (RTX 4080 SUPER)|
+|---|---|---|---|
+|0001|enable MMVQ for batch-1 MoE (was unreachable guard)|`fork/ggml/src/ggml-cuda/mmvq.cu`|tg: 52 → 255 t/s (4.9×)|
+|0002|SIMD ternary vec_dot (`__vsub4` + `dp4a`)|`fork/ggml/src/ggml-cuda/vecdotq.cuh`|tg: 255 → 377 t/s (7.2× total)|
+|0003|enable tq2_0 in test-backend-ops|`fork/tests/test-backend-ops.cpp`|103/103 unit tests against CPU|
+|0004|specialized 32-thread dequant kernel|`fork/ggml/src/ggml-cuda/convert.cu`|pp: 1422 → 1531 (+7.6%), tg: 353 → 369 (+4.4%)|
+|0005|vectorized uint16_t dequant|*(reverted — regressed ~2%)*|—|
+|0006|MMQ dispatch stub|*(in flight)*|—|
+
+**0001 / 0002** are the headline pair. 0001 is a single-line guard fix — the ternary MMVQ kernel existed and was wired for MoE expert routing, but `get_mmvq_mmid_max_batch` returned `-1` and the call site tested `ne2 <= -1`, which is unreachable since `ne2` is a batch size ≥ 1. 0002 vectorizes `vec_dot_tq2_0_q8_1`: 4 codes per step using `__vsub4` (per-byte subtract, not plain integer — avoids borrow across codes) and `ggml_cuda_dp4a` for the 4-way dot product. 32 scalar iterations → 8 SIMD iterations.
+
+**0003 / 0004** are the supporting pair. 0003 wires ternary into `test-backend-ops`, which had it commented out with `// TODO: implement for all backends` — that omission is how the 0001 bug survived. 0004 adds a specialized `dequantize_block_tq2_0` kernel mirroring `dequantize_block_q4_0`: 32 threads/block, each reads one byte per block half and emits 8 fp32 values via per-lane extraction; 8 coalesced fp32 writes per warp.
+
+### Current state (RTX 4080 SUPER, sm_89)
+
+|Configuration|pp512|tg128|VRAM|
+|---|---:|---:|---:|
+|stock fork|1256|52|7.3 GB|
+|+ patches 0001-0004 (this fork)|**1531**|**369**|7.3 GB|
+|q4_k_m reference (mature CUDA)|8130|298|12.3 GB|
+
+The patched ternary build now **generates faster than Q4_K** (369 vs 298 t/s) in 44% of the memory. Per gigabyte of weights, it does **2.9× more work** than Q4_K — the entire argument for ternary quantization, before these fixes was being thrown away by the CUDA path.
+
+### What's next
+
+The 5× pp512 gap is closed only by a fused MMQ kernel — dequant + GEMM + write FP32 in one launch. The chosen approach: adapt `Q2_0`'s MMQ as the template, ~8 working days to a working `dp4a` baseline. Phase 1 (a dispatch stub so the framework admits the type to the MMQ codepath) is in flight as patch 0006.
+
+Full design: **[→ MMQ_DESIGN.md](MMQ_DESIGN.md)**.
+
+---
 
 ```mermaid
 xychart-beta

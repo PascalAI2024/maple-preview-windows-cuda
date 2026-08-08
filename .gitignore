@@ -5,7 +5,7 @@ models/
 
 # Upstream fork is cloned by scripts/02-build.ps1, not vendored.
 fork/
-build/
+build*/
 
 # Logs and scratch
 *.log

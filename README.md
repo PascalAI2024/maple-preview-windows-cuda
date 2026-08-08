@@ -284,7 +284,40 @@ the missing MMQ kernels, and it is the honest remaining work.
 
 Patches are applied automatically by `02-build.ps1`; use `-NoPatch` for stock.
 
+### Fix 3 — specialized dequant kernel
+
+Out of the box the patched build above had two leftover inefficiencies on the
+prompt-processing path: the generic dequant template spins one thread per element
+pair (256 threads/block, each doing 1 read + 2 writes), and the dequant scalar
+code does dependent byte loads + shifts + masks. Both are unnecessary.
+
+`patches/0004` adds a specialized `dequantize_block_tq2_0` kernel that mirrors
+`dequantize_block_q4_0`: 32 threads/block, each reads **one byte per block
+half** and produces 8 fp32 values via per-lane extraction from the packed byte.
+8 coalesced fp32 writes per warp (32 contiguous elements per offset).
+
+| Build | pp512 | tg128 | vs baseline |
+|---|---:|---:|---:|
+| `+ 0001 + 0002` (no specialized dequant) | 1422.83 ± 30.01 | 353.43 ± 2.79 | — |
+| `+ 0001 + 0002 + 0004` (specialized dequant) | **1531 ± 30** | **369 ± 2** | **+7.6% pp / +4.4% tg** |
+
+(Measured on RTX 4080 SUPER, sm_89, CUDA 12.8 — same setup as the table above;
+pp512 / tg128 are means over three `llama-bench` runs.)
+
+Why this is a smaller win than Fixes 1–2: prompt processing is still gated by the
+dequant → F32 cuBLAS GEMM path, and there's no ternary MMQ kernel. Most of the
+prompt-processing time lives in the GEMM, not the dequant — so even a 2× faster
+dequant shows up as a modest pp improvement. The honest remaining gap to
+`q4_k_m` (8130 t/s) is the MMQ kernel, not the dequant.
+
+Validated: 31/31 `MUL_MAT(type_a=tq2_0,…)` tests pass and 72/72
+`MUL_MAT_ID(type_a=tq2_0,…)` tests pass against the CPU reference. Same
+harness as Fixes 1–2 (`./fork/build/bin/test-backend-ops.exe` with patches 0003
+enabling ternary coverage).
+
 **[→ Full investigation, evidence, and correctness checks](docs/moe-ternary-perf-fix.md)**
+
+
 
 **On the 218 tok/s claim:** the model card's headline figure is measured on an
 **M4 Mac mini using deepgrove's own on-device runtime** — a different stack
@@ -311,7 +344,7 @@ flowchart LR
     S4 --> API["OpenAI API /v1"]
     S4 --> B["llama-bench"]
 
-    P[("patches/<br/>0001 · 0002 · 0003")] -.->|auto-applied| S2
+P[("patches/<br/>0001 · 0002 · 0003 · 0004")] -.->|auto-applied| S2
     HF[("🤗 stamsam/<br/>maple-preview-gguf")] -.-> S3
 
     style S2 fill:#1d4ed8,stroke:#1e3a8a,color:#fff

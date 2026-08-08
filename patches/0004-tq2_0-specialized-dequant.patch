@@ -1,0 +1,105 @@
+diff --git a/ggml/src/ggml-cuda/convert.cu b/ggml/src/ggml-cuda/convert.cu
+index 618c1f0..ecd15af 100644
+--- a/ggml/src/ggml-cuda/convert.cu
++++ b/ggml/src/ggml-cuda/convert.cu
+@@ -135,6 +135,66 @@ static __global__ void dequantize_block_q4_1(const void * __restrict__ vx, dst_t
+         y[l+16] = d.x * (q[l] >>  4) + d.y;
+     }
+ }
++// Ternary dequant (QK_K=256 per block, one fp16 scale, 2-bit codes):
++//   element e -> byte = 32*(e/128) + (e%32), lane = (e/32)%4
++//   decode is (c - 1) * d. With c in {0,1,2,3} this gives {-d, 0, +d, +2d}.
++//   In practice the quantizer produces only {-d, 0, +d} for ternary weights,
++//   and +2d only for saturated values, but matching the CPU reference is what
++//   the kernel has to do.
++// 32 threads/block, each handles 8 elements (one byte in each half) -- 4x fewer
++// threads than the generic template, more work per thread (better register
++// reuse for `d`, more ILP), and 8 coalesced fp32 writes per warp.
++template<typename dst_t>
++static __global__ void dequantize_block_tq2_0(const void * __restrict__ vx, dst_t * __restrict__ yy, int nb) {
++    const int64_t i   = blockIdx.x;
++    const int64_t tid = threadIdx.x;
++
++    if (i >= nb) {
++        return;
++    }
++
++    // 32 threads, one per byte in each half. Thread t reads qs[t] and qs[t+32].
++    // Outputs: {t, t+32, t+64, t+96} from first half, {t+128, t+160, t+192, t+224}
++    // from second half. Within a warp each offset writes 32 contiguous fp32s ->
++    // coalesced.
++    const block_tq2_0 * x = (const block_tq2_0 *) vx + i;
++    const float d = __half2float(x->d);
++
++    const uint8_t q0 = x->qs[tid];
++    const uint8_t q1 = x->qs[tid + 32];
++
++    dst_t * y = yy + 256*i + tid;
++
++    // Decode (c - 1) * d, matching the CPU dequantize_row_tq2_0 in
++    // ggml-quants.c. Equivalent to (c * d) - d.
++    const int c0_0 = q0 & 0x3;
++    const int c1_0 = q1 & 0x3;
++    y[  0] = ggml_cuda_cast<dst_t>(c0_0 * d - d);
++    y[128] = ggml_cuda_cast<dst_t>(c1_0 * d - d);
++
++    const int c0_1 = (q0 >> 2) & 0x3;
++    const int c1_1 = (q1 >> 2) & 0x3;
++    y[ 32] = ggml_cuda_cast<dst_t>(c0_1 * d - d);
++    y[160] = ggml_cuda_cast<dst_t>(c1_1 * d - d);
++
++    const int c0_2 = (q0 >> 4) & 0x3;
++    const int c1_2 = (q1 >> 4) & 0x3;
++    y[ 64] = ggml_cuda_cast<dst_t>(c0_2 * d - d);
++    y[192] = ggml_cuda_cast<dst_t>(c1_2 * d - d);
++
++    const int c0_3 = (q0 >> 6) & 0x3;
++    const int c1_3 = (q1 >> 6) & 0x3;
++    y[ 96] = ggml_cuda_cast<dst_t>(c0_3 * d - d);
++    y[224] = ggml_cuda_cast<dst_t>(c1_3 * d - d);
++}
++
++template<typename dst_t>
++static void dequantize_row_tq2_0_cuda(const void * __restrict__ vx, dst_t * __restrict__ y, const int64_t k, cudaStream_t stream) {
++    const int nb = k / QK_K;
++    const int nb_total = (k + QK_K - 1) / QK_K;
++    dequantize_block_tq2_0<<<nb_total, 32, 0, stream>>>(vx, y, nb);
++}
++
+ 
+ //================================== k-quants
+ 
+@@ -716,7 +776,7 @@ to_fp16_cuda_t ggml_get_to_fp16_cuda(ggml_type type) {
+         case GGML_TYPE_Q2_0:
+             return dequantize_block_cont_cuda<QK2_0, QR2_0, dequantize_q2_0>;
+         case GGML_TYPE_TQ2_0:
+-            return dequantize_block_cont_cuda<QK_K, 1, dequantize_tq2_0>;
++            return dequantize_row_tq2_0_cuda<half>;
+         case GGML_TYPE_Q4_0:
+             return dequantize_row_q4_0_cuda;
+         case GGML_TYPE_Q4_1:
+@@ -778,7 +838,7 @@ to_fp32_cuda_t ggml_get_to_fp32_cuda(ggml_type type) {
+         case GGML_TYPE_Q2_0:
+             return dequantize_block_cont_cuda<QK2_0, QR2_0, dequantize_q2_0>;
+         case GGML_TYPE_TQ2_0:
+-            return dequantize_block_cont_cuda<QK_K, 1, dequantize_tq2_0>;
++            return dequantize_row_tq2_0_cuda<float>;
+         case GGML_TYPE_Q4_0:
+             return dequantize_row_q4_0_cuda;
+         case GGML_TYPE_Q4_1:
+diff --git a/ggml/src/ggml-cuda/dequantize.cuh b/ggml/src/ggml-cuda/dequantize.cuh
+index f47bf77..51354d6 100644
+--- a/ggml/src/ggml-cuda/dequantize.cuh
++++ b/ggml/src/ggml-cuda/dequantize.cuh
+@@ -49,7 +49,10 @@ static __device__ __forceinline__ void dequantize_tq2_0(const void * vx, const i
+ 
+     // tq2_0: 2-bit ternary codes (QK_K = 256 per block, one fp16 scale).
+     // Packing (matches ggml-quants.c): element e -> byte = 32*(e/128) + (e%32),
+-    // lane = (e/32)%4. Code c in {0,1,2,3} maps to symbol s = c - 1 in {-1, 0, 0, +1}.
++    // lane = (e/32)%4. Decoded value is (c - 1) * d; with c in {0,1,2,3} that
++    // gives {-d, 0, +d, +2d}. Quantizer produces {-d, 0, +d} for ternary weights
++    // and +2d only for saturated values; see quantize_row_tq2_0_ref in
++    // ggml-quants.c for the storage convention.
+     const int e0 = iqs;
+     const int e1 = iqs + 1;
+ 

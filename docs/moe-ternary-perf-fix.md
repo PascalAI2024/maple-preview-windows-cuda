@@ -142,6 +142,12 @@ Two conclusions:
 Worth noting what this buys: `tq2_0` reaches 85% of Q4_K's generation speed in
 **44% of the memory**. That is the ternary value proposition finally showing up.
 
+A later controlled reproduction on driver 610.62 measured **1457 → 10674
+pp512 (7.33×)** for the fused-MMQ enablement, with tg128 medians effectively
+unchanged and 103/103 CPU-reference cases passing. Samples, hashes, raw logs,
+and the harness are published in the
+[Hugging Face benchmark dataset](https://huggingface.co/datasets/x0me/maple-preview-cuda-benchmarks).
+
 ## Caveats
 
 - The isolated Fix 1–2 throughput measurements use one GPU (RTX 4080 SUPER,

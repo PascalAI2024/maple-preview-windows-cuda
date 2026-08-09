@@ -1,6 +1,6 @@
 # Running Maple-Preview locally on Windows + CUDA
 
-Four scripts that take a stock Windows machine to a running
+Four setup scripts that take a stock Windows machine to a running
 [Maple-Preview](https://huggingface.co/deepgrove/maple-preview) — a 20B-A1B
 **ternary-weight** MoE reasoning model — served over an OpenAI-compatible API on
 consumer hardware.
@@ -19,6 +19,7 @@ llama.cpp cannot load the deepgrove/maple-preview ternary model: it lacks both t
 - **Prompt processing (pp512)**: 1256 → 9189 t/s — 13% past `q4_k_m`'s 8130 t/s
 - **Memory**: 7.3 GB vs `q4_k_m`'s 12.3 GB — the ternary argument, validated on hardware
 - **Correctness**: 31/31 `MUL_MAT` and 72/72 `MUL_MAT_ID` tests against CPU
+- **Fresh reproduction**: 1457 → 10674 pp512 (7.33×) in a warm A/B/B/A run
 
 ### Patches
 
@@ -51,18 +52,41 @@ Seven patches are auto-applied by `scripts/02-build.ps1`; pass `-NoPatch` for st
 
 The patched ternary build now beats Q4_K in both measured paths while using 44% of the memory: pp512 is 13% faster (9189 vs 8130 t/s), and tg128 is 21% faster (362 vs 298 t/s). The MMQ enablement alone improved pp512 from a matched 1505 to 9189 t/s (6.1×); isolated generation remained unchanged within noise (358.0 vs 361.8 t/s).
 
+#### Reproducibility refresh — 2026-08-09
+
+A fresh warm-state A/B/B/A run on the same RTX 4080 SUPER, now using driver
+610.62, reproduced the prompt-path result: **1457 → 10674 pp512 (7.33×)**.
+Generation medians were effectively identical at 375.0 vs 374.8 tg128, and the
+enabled build again passed all 103 CPU-reference cases. The original 9189/8130
+comparison above is retained because its TQ2_0 and Q4_K control were measured in
+the same earlier environment; the new run did not re-benchmark Q4_K.
+
+```mermaid
+xychart-beta
+    title "Fresh controlled MMQ reproduction (pp512, t/s)"
+    x-axis ["MMQ disabled", "MMQ enabled"]
+    y-axis "tokens / sec" 0 --> 12000
+    bar [1457.1, 10674.0]
+```
+
+The public [Hugging Face benchmark dataset](https://huggingface.co/datasets/x0me/maple-preview-cuda-benchmarks)
+contains every sample, exact patch/model hashes, the benchmark harness, raw
+correctness logs, and the sm_86/sm_120 evidence. It contains no model weights.
+
 ### Cross-architecture validation
 
 |GPU|CUDA arch|`MUL_MAT`|`MUL_MAT_ID`|pp512|tg128|
 |---|---:|---:|---:|---:|---:|
 |RTX 2080 Ti|sm_75|31/31|72/72|—|—|
 |RTX 3080|sm_86|31/31|72/72|6986|343|
-|RTX 4080 SUPER|sm_89|31/31|72/72|9189|362|
+|RTX 4080 SUPER|sm_89|31/31|72/72|9189 original / 10674 refresh|362 original / 370 refresh|
 |RTX 5060 Ti|sm_120|31/31|72/72|5738|324|
 
 The fused MMQ path compiles and matches the CPU reference on Turing, Ampere,
 Ada, and Blackwell. Reproducibility artifacts for sm_86 and sm_120 are in
 [`remote-results/vast-crossarch-20260808/`](remote-results/vast-crossarch-20260808/).
+The latest local A/B/B/A run is in
+[`remote-results/local-controlled-20260809/`](remote-results/local-controlled-20260809/).
 The rented sm_75 node completed both correctness matrices, but its external
 network stalled before the 5.1 GiB model download, so no sm_75 throughput number
 is claimed.
@@ -432,6 +456,7 @@ fetched by the scripts.
 | `02-build.ps1` | Clones `stamsam/llama.cpp@prism`, builds with CUDA | Detects compute capability from `nvidia-smi`; asserts `LLM_ARCH_MAPLE` is present before spending 30 min on nvcc |
 | `03-download-model.ps1` | Fetches a GGUF from Hugging Face | Resumable; verifies byte count and GGUF magic |
 | `04-run.ps1` | Runs `chat`, `server`, `complete`, or `bench` | `-NGL 99` offloads every layer; adds CUDA to PATH so the loader finds `cudart`/`cublas` |
+| `05-validate-benchmark.ps1` | Runs warm A/B/B/A MMQ validation and CPU-reference tests | Writes normalized samples, hashes, GPU state, manifests, and complete correctness logs |
 
 `04-run.ps1 -Mode <mode>`:
 

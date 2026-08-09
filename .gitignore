@@ -9,6 +9,7 @@ build*/
 
 # Logs and scratch
 *.log
+hf-dataset/
 
 # Local credentials and paid-compute account metadata
 invoke-vast-env.ps1

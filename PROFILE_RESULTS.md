@@ -10,12 +10,21 @@
 |---|---:|---:|---:|---:|
 |RTX 2080 Ti|sm_75|—|—|103/103|
 |RTX 3080|sm_86|6985.69 ± 39.85|342.73 ± 2.36|103/103|
-|RTX 4080 SUPER|sm_89|9189 matched mean|361.8 ± 3.7|103/103|
+|RTX 4080 SUPER (original matched run)|sm_89|9189 matched mean|361.8 ± 3.7|103/103|
+|RTX 4080 SUPER (2026-08-09 refresh)|sm_89|10674.01 ± 100.62|370.04 ± 10.39|103/103|
 |RTX 5060 Ti|sm_120|5738.43 ± 43.23|323.89 ± 1.95|103/103|
 
 The sm_75 node completed both correctness matrices before a provider-network
 stall prevented model download. Reproducibility artifacts for sm_86 and sm_120
-are in `remote-results/vast-crossarch-20260808/`.
+are in `remote-results/vast-crossarch-20260808/`. The fresh sm_89 A/B/B/A run
+is in `remote-results/local-controlled-20260809/`; its public card, normalized
+data, raw logs, and patches are in the
+[Hugging Face benchmark dataset](https://huggingface.co/datasets/x0me/maple-preview-cuda-benchmarks).
+
+The 2026-08-09 run used driver 610.62 and CUDA 12.8. It warmed both builds,
+discarded those warmups, then ran MMQ/fallback/fallback/MMQ with five samples per
+metric per invocation. Its tg128 medians were 374.82 and 375.04 t/s, confirming
+that the MMQ change targets prompt processing rather than batch-one generation.
 
 ## Method
 

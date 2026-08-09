@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "generated_utc": "2026-08-09T05:42:39.9634073Z",
+  "artifact_commit": "d161aebcfad2b0278ef8a53bf6003b0066512b82",
+  "fork_commit": "9ee03eec62d088a117ab916bbe489e7a3872a21f",
+  "cuda_toolkit_version": "12.8",
+  "patchset": "0001-0008 (0005 reverted)",
+  "patches": [
+    {
+      "file": "patches/0001-tq2_0-enable-mmvq-for-batch1-moe.patch",
+      "sha256": "a7be6671e2fc8855a873c42cf1c56b5befe4af31c5c53de86e6707424e5b25a6"
+    },
+    {
+      "file": "patches/0002-tq2_0-simd-vecdot.patch",
+      "sha256": "2e4cecaf62def187649f241bd2373a73f3e55e32525ba029d96c7bed9fee598a"
+    },
+    {
+      "file": "patches/0003-enable-tq2_0-test-coverage.patch",
+      "sha256": "63a0c9bb9437de55ab639483519679ffd75b42a7a4fe6125e490146a3cbb02a1"
+    },
+    {
+      "file": "patches/0004-tq2_0-specialized-dequant.patch",
+      "sha256": "c6de02549970112379cf46dde53a18d864538b891db21cabba2699a77d50027f"
+    },
+    {
+      "file": "patches/0006-tq2_0-mmq-stub.patch",
+      "sha256": "a0b6eb4a7f287d0e78b0471ffb139bef6aea411e61fd6a88ccf887b8cae5b63e"
+    },
+    {
+      "file": "patches/0007-tq2_0-load-tiles.patch",
+      "sha256": "3b3d9737a2ca803791044657ad4c40fd158b50fea5e922411515a425d4580ae5"
+    },
+    {
+      "file": "patches/0008-tq2_0-enable-mmq.patch",
+      "sha256": "4d25138da3c6d1528c6d2d9285741b7c961d00ee9e5d7712b74eb6b47ae204bd"
+    }
+  ],
+  "model": {
+    "repo": "stamsam/maple-preview-gguf",
+    "file": "maple-tq2_0.gguf",
+    "bytes": 5454482432,
+    "sha256": "09d219202562dbd17722dc8e3273527a021182ab7f892c2a06aac459a8f3a090"
+  },
+  "binaries": {
+    "mmq": "ed3358ac5a676e61992327630214b3369384cb31d5b3a06c9826083dfd21457e",
+    "fallback": "ee660446aa919a925e511f84100ff9f2ea5051fc48f6bd8cff5b184fe15a3f59",
+    "test_backend_ops": "4436b6d997a2ad6f9d88723fd2db33abcb623539967064b5141a23462f7dca2f"
+  },
+  "command": "llama-bench -m <MODEL> -ngl 99 -p 512 -n 128 -r 5 -t 8 -o jsonl",
+  "notes": [
+    "The warmup runs are deliberately excluded from the data.",
+    "Windows WDDM clock and background desktop state can materially affect short benchmark invocations.",
+    "The A/B/B/A order controls for drift without claiming laboratory-grade clock locking."
+  ]
+}

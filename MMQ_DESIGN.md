@@ -2,16 +2,17 @@
 
 > Target: a fused dequant + matmul kernel for TQ2_0 that closes the 5x throughput gap versus q4_k_m on RTX 4080 SUPER (sm_89).
 > Audience: someone who has never seen llama.cpp internals.
-> Status: research only -- no source files were modified.
+> Status: implemented by patches 0006–0008; correctness-validated on sm_75, sm_86, sm_89, and sm_120.
 
 ## 0. Context (why this matters)
 
-Profile on sm_89 (`fork/ggml/src/ggml-cuda/ggml-cuda.cu:102`):
+Pre-implementation profile on sm_89 (`fork/ggml/src/ggml-cuda/ggml-cuda.cu:102`):
 
 - TQ2_0 pp512 = 1398 t/s
 - q4_k_m pp512 = 8130 t/s
 
-The TQ2_0 path (also from `ggml-cuda.cu:102` and the fp16 path comment) is:
+The historical TQ2_0 fallback path (also from `ggml-cuda.cu:102` and the fp16
+path comment) was:
 - dequant TQ2_0 -> FP16 (25% of total)
 - activation cast -> FP16 (14%)
 - cuBLAS GEMM in FP16 (44%)
@@ -19,11 +20,12 @@ The TQ2_0 path (also from `ggml-cuda.cu:102` and the fp16 path comment) is:
 
 q4_k_m fuses everything in ONE MMQ kernel (`fork/ggml/src/ggml-cuda/mmq.cuh`), no FP16 round-trip. Per-matmul budget on sm_89:
 
-- Current TQ2_0 cuBLAS path: ~58 us total
+- Pre-MMQ TQ2_0 cuBLAS path: ~58 us total
 - q4_k_m MMQ equivalent (GEMM-only): ~13 us
 - Goal: get TQ2_0 per-matmul from 58 us -> ~25 us (~2x pp512)
 
-The only way to close the gap is an MMQ kernel for TQ2_0.
+The implemented patches close this gap by adding the TQ2_0 MMQ path described
+below.
 
 ---
 
@@ -320,7 +322,7 @@ Hardware: RTX 4080 SUPER (sm_89, Ada Lovelace, NVIDIA). The constants we cite ar
 
 - M (mmq_y) = 128 -- same as Q4_K and Q2_0 on sm_89.
 - N (mmq_x) = 8 -- small because QK_K is already 256 and we only need 1 x-block per iteration. mmq_x=8 means 8 output columns per tile, which gives a healthy number of tiles for an RTX 4080 SUPER's 52 SMs (52 x ceil(8192/8)/2 ~ 26k tiles per layer for a typical 4096-dim hidden -> 8192-dim FFN). The `mul_mat_q_case` runtime tuner (`mmq.cuh:4170-4217`) will pick this or larger.
-- K (MMQ_TILE_NE_K = 32) per inner step. The `vec_dot_tq2_0_q8_1_dp4a` inner loop iterates k01 from 0 to MMQ_TILE_NE_K=32 stepping by `QR*VDR`. With QR=4 and VDR=8, each iteration processes 32 elements (= one TQ2_0 chunk), and there is exactly ONE iteration. So the inner K loop is fully unrolled, and we get the same performance as the MMVQ call.
+- K (MMQ_TILE_NE_K = 32) per inner step. `load_tiles_tq2_0` expands each packed ternary block into 256 signed bytes in natural K order. The existing Q8-shaped dp4a and Turing MMA consumers then process the tile without a TQ2_0-specific dot-product implementation.
 - y tile staging: MMQ_Q8_1_DS_LAYOUT_D4 (same as Q2_0/Q8_0). One scale per 32-element Q8_1 sub-block; no `ds4` sum needed because TQ2_0 has only `d` (no min).
 
 ### 6.2 Smem budget
@@ -333,133 +335,97 @@ Each thread holds `mmq_x*mmq_y / (nwarps*warp_size) = 8*128 / (8*32) = 4` floats
 
 ---
 
-## 7. Block-level dot product algorithm
+## 7. Block-level data path
 
-TQ2_0 K-block: 256 elements packed as 64 bytes (4 codes per byte), 1 fp16 scale.
-Q8_1 sub-block: 32 elements packed as 32 int8, 1 half2 scale.
+TQ2_0 K-block: 256 elements packed as 64 bytes (four 2-bit codes per byte), one fp16 scale. The source layout is strided: byte $32\lfloor e/128\rfloor + (e\bmod32)$ stores four elements 32 positions apart.
 
-Pseudocode (mirrors `vec_dot_tq2_0_q8_1` at `vecdotq.cuh:781-820` but in the MMQ context -- reads from the x_tile shared buffer that `load_tiles_tq2_0` already populated with signed bytes):
+`load_tiles_tq2_0` assigns one thread to each natural 32-element chunk:
 
 ```cpp
-// Process ONE K-stripe of MMQ_TILE_NE_K=32 elements.
-// Each call to vec_dot accumulates into sum[j0/nwarps*mmq_y/warp_size + i0/warp_size].
-template <int mmq_x, int mmq_y>
-static __device__ __forceinline__ void vec_dot_tq2_0_q8_1_dp4a(
-    const int * x, const int * y, float * sum, const int k00) {
+const int byte_base = 32 * (chunk >> 2);
+const int shift = 2 * (chunk & 3);
 
-    // x is the tile_x shared buffer (signed bytes packed by load_tiles).
-    // y is the tile_y shared buffer in block_q8_1_mmq layout.
-    // Each k01 step processes 32 elements (one TQ2_0 chunk of 32).
-    const half2 * y_ds = (const half2 *) y;                  // 4 half2 per row
-    const int   * y_qs = (const int   *) y + 4;              // qs starts after ds
-    const int   * x_qs = (const int   *) x + (k00 + k01) / QR_TQ2_0;  // already-signed bytes
-
-    // VDR=8: process 8 chunks of 32 = full 256 elements in one call.
-    // Per TQ2_0 chunk, we read 4 packed bytes, extract lane, dp4a with 4 activation bytes.
-    int sumi = 0;
-    #pragma unroll
-    for (int chunk = 0; chunk < VDR_TQ2_0_Q8_1_MMQ; ++chunk) {        // 8 iters
-        // load_tiles already shifted codes by 2*lane and stored as int32 per chunk:
-        // one int32 holds 4 signed bytes, one byte per element in the chunk.
-        const int syms = x_qs[chunk * (MMQ_TILE_NE_K / 4 / 2) + ...];  // 4 signed bytes
-        const int acts = y_qs[chunk * (MMQ_TILE_NE_K / 4)];            // 4 activation bytes
-        sumi = ggml_cuda_dp4a(syms, acts, sumi);
-    }
-
-    // Scale once per row of the tile. d is the TQ2_0 fp16 scale;
-    // d8 is the Q8_1 scale; both are pre-staged in shared memory by load_tiles.
-    const float d   = __half2float(x_d[i]);
-    const float d8  = __half2float(y_ds[j * MMQ_TILE_Y_K + k01 / QI8_1]);
-    sum[j0/nwarps*mmq_y/warp_size + i0/warp_size] += sumi * (d * d8);
+for (int j = 0; j < 8; ++j) {
+    const int q4 = get_int_b2(block.qs, byte_base/4 + j);
+    const int codes = (q4 >> shift) & 0x03030303;
+    const int syms = __vsub4(codes, 0x01010101);
+    x_tile[chunk*QI8_0 + j] = syms;
 }
 ```
 
-In actual lines (excluding the load_tiles prep and the per-thread sum indexing), the inner dp4a chain is:
+This transposes the byte-major source packing into natural element order while expanding codes `{0,1,2}` to signed bytes `{-1,0,+1}`. Each chunk writes eight `int32` values (32 signed bytes); eight chunks fill the 256-element block. The single block scale is replicated into the eight Q8_1 scale slots, one per 32-element chunk.
 
-```c
-int sumi = 0;
-#pragma unroll
-for (int chunk = 0; chunk < 8; ++chunk) {       // 8 chunks per 256-elem block
-    int syms = x_tile[chunk_idx + chunk];         // 4 signed bytes, one int32
-    int acts = y_tile[chunk_idx + chunk];         // 4 int8 activations, one int32
-    sumi = ggml_cuda_dp4a(syms, acts, sumi);      // 4x int8 dot product
-}
-sum[...] += (float)sumi * d * d8;
-```
-
-That is **8 dp4a + 1 FMA** per (thread, k-stripe), which is what the MMVQ `vec_dot_tq2_0_q8_1` already does 8x per block, except the MMQ form accumulates across the tile instead of returning.
+The resulting shared-memory row is exactly the signed-Q8 shape already consumed by `vec_dot_q8_0_q8_1_dp4a` and `vec_dot_q8_0_q8_1_mma`. No custom TQ2_0 dot product or MMA path is required. A deterministic host simulation of this indexing matched the scalar TQ2_0 element mapping for all 256 positions.
 
 ---
 
 ## 8. Phase plan to implementation
 
-Realistic PR-shaped milestone breakdown for an engineer with a CUDA background.
+### Phase 0 -- Pre-flight (complete)
 
-### Phase 0 -- Pre-flight (1 day)
+- Map the TQ2_0 fallback, MMQ dispatch, shared-memory sizing, and test surface.
+- Keep `ggml_cuda_should_use_mmq(GGML_TYPE_TQ2_0, ...)` false until a correctness gate explicitly enables it.
 
-- Confirm sm_89 is the only target for now; document the CC_IS_NVIDIA gating in `mmq.cu`.
-- Add a TQ2_0 entry to `ggml_cuda_should_use_mmq` (`mmq.cu:280-296`) with a TODO pointing at the unimplemented kernel; verify the build still compiles (it should -- the trait specialization will just GGML_ABORT at runtime if no `mmq_type_traits<TQ2_0>` exists, which is the current behavior).
-- Write a unit test: a 1024x1024 FP32 matmul, quantize to TQ2_0, run both the fp16 path and (after Phase 4) the MMQ path; assert bit-exact agreement to ~1e-3.
+### Phase 1 -- Dormant dispatch (patch 0006, complete)
 
-### Phase 1 -- Stub the dispatch (1 day)
+- Add the TQ2_0 dispatch, layout/sizing entries, trait stub, and explicit template instance.
+- Preserve runtime behavior by leaving MMQ disabled.
 
-- Add `mmq_type_traits<...,GGML_TYPE_TQ2_0>` (`mmq.cuh:3443-3451` block) that calls `vec_dot_q8_0_q8_1_dp4a` and `load_tiles_q2_0` -- temporarily reusing Q2_0 functions. This is intentionally broken (wrong tile size, wrong element count) but proves the dispatch wiring.
-- Add `mmq-instance-tq2_0.cu` (4 lines).
-- Add the three switch entries in `mmq_get_q8_1_ds_layout`, `mmq_get_dp4a_tile_x_sizes`, `mmq_get_mma_tile_x_k` -- use the Q2_0/Q8_0 values.
-- Expected outcome: the kernel compiles, launches, produces garbage. Do not merge.
+### Phase 2 -- Natural-order tile loader (patch 0007, complete)
 
-### Phase 2 -- load_tiles_tq2_0 (2 days)
+- Add `load_tiles_tq2_0<mmq_y, need_check>`.
+- Decode the strided source packing into natural K order.
+- Replicate the block scale into the eight Q8_1 scale slots.
+- Reuse the generic signed-Q8 dp4a and Turing MMA consumers.
+- Verification: sm_89 CUDA build instantiated `mmq-instance-tq2_0`; reviewer checked shared-memory bounds and both consumer layouts; a host mapping simulation matched all 256 scalar positions; dormant fallback tests passed 31/31.
 
-- Implement `load_tiles_tq2_0<mmq_y, need_check>(x, tile_x, kbx0, i_max, stride)`:
-  - For each thread, load its slice of `block_tq2_0[i]` qs bytes (64 bytes per block), shift by `2*lane`, store as 4 packed bytes -> 1 int32 of signed bytes into the x_tile shared buffer.
-  - Load the per-block `d` (fp16) into the dm slot of the tile.
-  - Mirror the Q2_0 pattern (`mmq.cuh:354-415`) but with `get_int_b2` reads of 4 packed bytes per chunk (same as `vec_dot_tq2_0_q8_1`).
-- Unit test: write a tiny kernel that loads a single block from a known TQ2_0 buffer and compares the resulting tile_x against an FP16 reference matmul on the same data. Should agree to ~1e-3.
+### Phase 3 -- Enable and correctness gate (patch 0008, complete)
 
-### Phase 3 -- vec_dot_tq2_0_q8_1_dp4a (2 days)
+- Add TQ2_0 to `ggml_cuda_should_use_mmq` while leaving the independent MMVQ gate unchanged.
+- Register TQ2_0 in `template-instances/generate_cu_files.py` so regeneration preserves the explicit instance.
+- Verification on sm_89: 31/31 `MUL_MAT` and 72/72 `MUL_MAT_ID` cases passed against the CPU backend, covering `k=256/1024`, batch boundaries, permutations, large rows, and expert routing.
+- Greedy output is stable within each build but not byte-identical between dequant+cuBLAS and signed-s8 MMA because their accumulation order differs. Controlled chat smokes returned the same correct arithmetic and comparison answers.
 
-- Implement `vec_dot_tq2_0_q8_1_dp4a<mmq_x, mmq_y>(x, y, sum, k00)` per section 7.
-- Inner loop: 8 chunks x 1 dp4a per chunk = 8 dp4a + 1 FMA per (thread, K-stripe).
-- Wire it into `mmq_type_traits<TQ2_0>` and remove the Q2_0 stub from Phase 1.
-- Unit test: same as Phase 0's test but with this kernel. Bit-exact against the fp16 path.
+### Phase 4 -- Benchmark and tune (complete for sm_89)
 
-### Phase 4 -- Bench and tune (2 days)
+- Matched A/B/B/A pp512 measurements: fallback 1447/1564 t/s; MMQ 9223/9155 t/s. Mean 1505 → 9189 t/s, a 6.1× improvement.
+- Isolated tg128: fallback 358.0 ± 4.7 t/s; MMQ 361.8 ± 3.7 t/s. No generation regression.
+- The existing `mmq_x_best` search and signed-s8 MMA consumer are already effective on sm_89; no architecture-specific tuner change is justified.
 
-- Add `VDR_TQ2_0_Q8_1_MMQ = 8` to `vecdotq.cuh`.
-- Confirm `mmq_x_best` (chosen at runtime by `mul_mat_q_case:4170-4217`) is in the 8..32 range for sm_89; if not, override the tuner.
-- Profile: target >= 6000 t/s at pp512 to match ~2x the current 1398.
-- Add the `ggml_cuda_mul_mat_q_switch_type` entry in `mmq.cu:6-77`.
-- Revert the experimental `mmvq.cu:254` TQ2_0 short-circuit (the `return 1` that disables MMVQ for TQ2_0 large batches).
+### Phase 5 -- Portability (complete)
 
-### Phase 5 -- MMA path (optional, 3 days)
+- Compiled the enabled path for sm_75, sm_86, and sm_120 in addition to the
+  local sm_89 build.
+- All four architectures passed 31/31 `MUL_MAT` and 72/72 `MUL_MAT_ID` cases
+  against the CPU reference.
+- Full remote benchmarks: RTX 3080 (sm_86) 6986 pp512 / 343 tg128; RTX 5060 Ti
+  (sm_120) 5738 pp512 / 324 tg128. The sm_75 provider completed correctness but
+  could not download the model, so no throughput result is claimed.
+- Evidence: `remote-results/vast-crossarch-20260808/`.
 
-- sm_89 supports Turing MMA. Adapt `vec_dot_q8_0_q8_1_mma<mmq_x, mmq_y, MMQ_Q8_1_DS_LAYOUT_D4>` for TQ2_0 by emitting signed-byte operands. Most of this reuses Q2_0's MMA plumbing.
-- This is what q4_k_m uses on sm_89 (Turing+); expected additional speedup is 10-30% over the dp4a path.
+### Remaining effort
 
-### Total effort estimate
-
-- Phase 0-4: 8 working days (~1.5 engineer-weeks) for a working dp4a MMQ with measurable speedup.
-- Phase 5: +3 days for the MMA path.
-- Testing/benchmarks/docs: +2 days.
+Correctness portability is complete. Remaining work is architecture-specific
+performance tuning for sm_86 and sm_120; no separate custom dp4a or MMA
+implementation is required for correctness.
 
 ---
 
 ## 9. Open questions
 
-1. `mul_mat_q_case:4170-4217` runtime tuner. The `mmq_x_best` loop picks the best `mmq_x` for the current problem shape. TQ2_0 may prefer a different range than Q2_0 because QK_K is 2x larger; we will need to extend the candidate set (8..128) or trust the existing loop.
-2. `mmvq.cu:254` gating. The current code returns 1 from `mmvq_mmid_max` for TQ2_0, forcing large batches to dequant+cuBLAS. After Phase 4, this should be removed (return the default value) so MMVQ stays available for small batches and MMQ handles large ones.
-3. `vec_dot_tq2_0_q8_1` reuse. The MMVQ function still calls `bq8_1[iqs]` directly from gmem, which means the MMVQ path keeps working unchanged. We only add new MMQ-specific code; no edits to existing functions.
+1. `mul_mat_q_case:4170-4217` runtime tuner. Resolved for sm_89: the existing `mmq_x_best` loop produced 9189 pp512 without modification. sm_86 and sm_120 are correct but slower (6986 and 5738 pp512); profile their selected tile shapes before adding architecture-specific tuning.
+2. `mmvq.cu:254` gating. Intentionally unchanged: batch-1 TQ2_0 MoE work still takes MMVQ, while larger batches now fall through to the enabled MMQ path.
+3. `vec_dot_tq2_0_q8_1` remains unchanged for MMVQ. MMQ expands the source codes once while loading shared memory, then reuses the existing signed-Q8 consumers.
 
 ---
 
 ## 10. Summary
 
-- TQ2_0 already has the per-element MMVQ building block (`vec_dot_tq2_0_q8_1`, `vecdotq.cuh:781-820`).
-- An MMQ kernel needs 10 new pieces (section 3.2), of which 5 are one-line switch entries and 2 are small helper functions; the rest is one large function (`load_tiles_tq2_0`) and one medium one (`vec_dot_tq2_0_q8_1_dp4a`).
-- The right model to copy is **Q2_0's MMQ** (Approach B), not Q4_K's -- Q2_0 has the same "one fp16 scale, 2-bit codes" structure as TQ2_0.
-- For sm_89, tile shape mmq_x=8..32 (chosen at runtime), mmq_y=128, MMQ_TILE_NE_K=32 is the sweet spot. Smem ~34 KB/block; register pressure ~10/thread.
-- The block-level dot product (section 7) is 8 dp4a + 1 FMA per (thread, K-stripe), exactly mirroring what MMVQ already does, just accumulated across a tile instead of returned.
-- Realistic effort: 8 working days for a working dp4a MMQ with measurable speedup, +3 days for MMA on sm_89.
+- TQ2_0's source packing is byte-major, but a natural-order expansion in `load_tiles_tq2_0` makes it compatible with llama.cpp's existing signed-Q8 MMQ consumers.
+- Patch 0006 supplies dispatch, layout sizing, and template instantiation; patch 0007 supplies the natural-K loader; patch 0008 enables runtime MMQ and makes the generator preserve its explicit instance.
+- The Q2_0 MMQ remains the structural template: one fp16 block scale and a Q8-shaped shared-memory row.
+- On sm_89, 103/103 targeted CPU-reference tests pass, pp512 improves 6.1× to 9189 t/s, and isolated tg128 is unchanged within noise.
+- Cross-architecture validation passes on sm_75, sm_86, sm_89, and sm_120. Remote sm_86 and sm_120 benchmarks reach 6986/343 and 5738/324 pp512/tg128 respectively; next work is evidence-led architecture-specific tuning.
 
 ---
 

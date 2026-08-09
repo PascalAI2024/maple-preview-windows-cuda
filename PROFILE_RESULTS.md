@@ -1,8 +1,26 @@
 # Maple pp512 Profiling Results
 
+> Historical pre-MMQ profile. Patches 0006–0008 subsequently fused TQ2_0 prompt
+> matmuls through the existing signed-s8 MMQ consumer: matched pp512 improved
+> from 1505 to 9189 t/s on this sm_89 system. See `MMQ_DESIGN.md`.
+
+## Final fused-path cross-architecture results
+
+|GPU|CUDA arch|pp512 (t/s)|tg128 (t/s)|CPU-reference tests|
+|---|---:|---:|---:|---:|
+|RTX 2080 Ti|sm_75|—|—|103/103|
+|RTX 3080|sm_86|6985.69 ± 39.85|342.73 ± 2.36|103/103|
+|RTX 4080 SUPER|sm_89|9189 matched mean|361.8 ± 3.7|103/103|
+|RTX 5060 Ti|sm_120|5738.43 ± 43.23|323.89 ± 1.95|103/103|
+
+The sm_75 node completed both correctness matrices before a provider-network
+stall prevented model download. Reproducibility artifacts for sm_86 and sm_120
+are in `remote-results/vast-crossarch-20260808/`.
+
 ## Method
 
-Target: `C:/Users/pasca/dev/maple/fork` (local build of maple-tq2_0, patches 0001-0004 applied).
+Historical target: `C:/Users/pasca/dev/maple/fork` (local build of
+maple-tq2_0, patches 0001–0004 applied).
 Binary: `build-dequant-fix/bin/llama-bench.exe` (Release, sm_89, CUDA 12.8).
 GPU: NVIDIA GeForce RTX 4080 SUPER (16 GB, cc 8.9).
 Model: `models/maple-tq2_0.gguf` (5.07 GiB, 20.21 B params, TQ2_0 / 2.06 bpw ternary).
@@ -102,7 +120,11 @@ Baseline `pp512` throughputs (profiling disabled, same build directory, run sepa
 
 For TQ2_0 + pp512 + RTX 4080 SUPER + 20.21 B params:
 - 1398 t/s × 512 tokens = ~715k tokens through the prompt per ~366 ms wallclock budget.
-- All matmuls are dispatched through `cublasGemmEx` after dequant, **never through the fast fused `mmq` kernels that Q4_K_M uses**. TQ2_0 has no MMQ implementation, so it pays: read TQ2_0 → write FP16 → read FP16 → GEMM → write FP16 → read FP16 → write FP32. That round-trip through FP16 in HBM is the tax.
+- In this historical build, all matmuls were dispatched through `cublasGemmEx`
+  after dequant, **never through the fast fused `mmq` kernels that Q4_K_M
+  uses**. Before patches 0006–0008, TQ2_0 paid: read TQ2_0 → write FP16 → read
+  FP16 → GEMM → write FP16 → read FP16 → write FP32. That round-trip
+  through FP16 in HBM was the tax.
 
 If we fuse dequant into the GEMM (the same trick Q4_K_M's MMQ uses), we eliminate the FP16 staging buffer and the FP16→FP32 post-conv. The expected wins:
 - Skip `dequant src0` (25%): the MMQ kernel reads TQ2_0 directly.

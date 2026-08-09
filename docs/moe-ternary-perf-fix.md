@@ -134,22 +134,23 @@ Two conclusions:
    is gone. This is what confirms the diagnosis rather than merely correlating
    with it.
 
-2. **Prompt processing is the remaining ternary gap: 1173 vs 8130 t/s, ~7×.**
-   That is the missing MMQ kernels, exactly as the fork documents. It is not
-   fixable with a guard change; it needs ternary MMQ kernels written. That is the
-   real outstanding work.
+2. **At this stage, prompt processing was the remaining ternary gap: 1173 vs
+   8130 t/s, ~7×.** The missing MMQ path became the follow-on work. Patches
+   0006–0008 later implemented and enabled it, reaching 9189 pp512 on the same
+   sm_89 system.
 
 Worth noting what this buys: `tq2_0` reaches 85% of Q4_K's generation speed in
 **44% of the memory**. That is the ternary value proposition finally showing up.
 
 ## Caveats
 
-- Measured on **one** GPU (RTX 4080 SUPER, sm_89, CUDA 12.8) with **one** model.
-  Ada Lovelace takes a specific branch in this function; other architectures are
-  untested by me.
-- I cannot rule out that `-1` guards against something real on hardware I do not
-  have. The verification above is behavioural, not a proof of numerical
-  equivalence — I did not run a perplexity comparison.
+- The isolated Fix 1–2 throughput measurements use one GPU (RTX 4080 SUPER,
+  sm_89, CUDA 12.8) and one model. The final seven-patch build also passes
+  31/31 `MUL_MAT` and 72/72 `MUL_MAT_ID` CPU-reference cases on sm_75, sm_86,
+  and sm_120; remote sm_86 and sm_120 throughput is recorded in
+  [`../remote-results/vast-crossarch-20260808/`](../remote-results/vast-crossarch-20260808/).
+- The verification is behavioural and numerical at the matmul boundary, not a
+  perplexity comparison.
 
 
 
@@ -349,10 +350,11 @@ Fix 3 only affects the dequant step inside the dequant → FP16 cuBLAS GEMM
 path. Per `PROFILE_RESULTS.md`, on this model+GPU that step is **~25% of matmul
 time** for pp512. Even a free dequant would buy at most 25% on pp, because the
 FP16 GEMM (~44%), the FP16→FP32 post-conv (~16%), and the F32→FP16 activation
-cast (~14%) are all still on the critical path. The honest remaining gap to
-`q4_k_m` (8130 t/s) is the missing **ternary MMQ kernel** that fuses dequant +
-GEMM the way Q4_K does — see [`MMQ_DESIGN.md`](../MMQ_DESIGN.md) for the design
-analysis.
+cast (~14%) were all still on the critical path at this stage. That diagnosis
+led to patches 0006–0008: the TQ2_0 loader now expands into llama.cpp's existing
+signed-s8 MMQ tile, and the enabled path reaches 9189 pp512 versus the 8130 t/s
+`q4_k_m` reference. See [`MMQ_DESIGN.md`](../MMQ_DESIGN.md) for the completed
+design and correctness gate.
 
 ### Cross-arch verification
 

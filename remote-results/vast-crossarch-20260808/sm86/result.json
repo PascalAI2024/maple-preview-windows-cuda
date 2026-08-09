@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "status": "complete",
+  "started_utc": "2026-08-08T08:59:40Z",
+  "completed_utc": "2026-08-08T09:07:43Z",
+  "gpu_name": "NVIDIA GeForce RTX 3080",
+  "compute_capability": "8.6",
+  "cuda_arch": "86",
+  "gpu_memory": "10240 MiB",
+  "driver_version": "580.173.02",
+  "mul_mat_passed": 31,
+  "mul_mat_id_passed": 72,
+  "pp512_avg_ts": 6985.69047,
+  "pp512_stddev_ts": 39.853495,
+  "tg128_avg_ts": 342.727122,
+  "tg128_stddev_ts": 2.362002
+}

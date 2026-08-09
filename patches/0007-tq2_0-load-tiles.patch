@@ -1,0 +1,115 @@
+diff --git a/ggml/src/ggml-cuda/mmq.cuh b/ggml/src/ggml-cuda/mmq.cuh
+index 4231a5b..08b33fc 100644
+--- a/ggml/src/ggml-cuda/mmq.cuh
++++ b/ggml/src/ggml-cuda/mmq.cuh
+@@ -495,6 +495,83 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
+     }
+ }
+ 
++// Decode TQ2_0 into natural K order so the generic Q8-shaped dp4a and MMA
++// consumers can read adjacent shared-memory bytes as adjacent elements.
++// Each source byte stores four elements 32 positions apart:
++//   byte = 32*(element/128) + element%32, lane = (element/32)%4.
++template <int mmq_y, bool need_check> static __device__ __forceinline__ void load_tiles_tq2_0(
++    const char * __restrict__ x, int * __restrict__ x_tile, const int kbx0, const int i_max, const int stride) {
++    constexpr int nwarps = mmq_get_nwarps_device();
++    constexpr int warp_size = ggml_cuda_get_physical_warp_size();
++
++#if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
++    int   * x_qs = (int   *)  x_tile;
++    float * x_df = (float *) (x_qs + 2*MMQ_TILE_NE_K);
++#else
++    constexpr tile_x_sizes txs = mmq_get_dp4a_tile_x_sizes(GGML_TYPE_TQ2_0, mmq_y);
++    int   * x_qs = (int   *)  x_tile;
++    float * x_df = (float *) (x_qs + txs.qs);
++#endif // defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
++
++    constexpr int blocks_per_iter         = MMQ_ITER_K / QK_K;
++    constexpr int chunks_per_block        = QK_K / 32;
++    constexpr int threads_per_row         = blocks_per_iter * chunks_per_block;
++    constexpr int nrows                   = warp_size / threads_per_row;
++    constexpr int scale_entries_per_block = QK_K / QK8_1;
++    constexpr int scale_entries_per_row   = blocks_per_iter * scale_entries_per_block;
++
++    const int txi   = threadIdx.x % threads_per_row;
++    const int kbx   = txi / chunks_per_block;
++    const int chunk = txi % chunks_per_block;
++
++#pragma unroll
++    for (int i0 = 0; i0 < mmq_y; i0 += nrows*nwarps) {
++        int i = i0 + threadIdx.y*nrows + threadIdx.x/threads_per_row;
++
++        if (need_check) {
++            i = min(i, i_max);
++        }
++
++        const block_tq2_0 * bxi = (const block_tq2_0 *) x + kbx0 + i*stride + kbx;
++        const int byte_base = 32 * (chunk >> 2);
++        const int shift = 2 * (chunk & 3);
++        const int dst_offset = kbx*(scale_entries_per_block*QI8_0) + chunk*QI8_0;
++
++#pragma unroll
++        for (int j = 0; j < 8; ++j) {
++            const int q4 = get_int_b2(bxi->qs, byte_base/4 + j);
++            const int codes = (q4 >> shift) & 0x03030303;
++            const int syms = __vsub4(codes, 0x01010101);
++
++#if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
++            x_qs[i*MMQ_MMA_TILE_X_K_Q8_0 + dst_offset + j] = syms;
++#else
++            x_qs[i*(2*MMQ_TILE_NE_K + 1) + dst_offset + j] = syms;
++#endif // defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
++        }
++    }
++
++    const int ksx = threadIdx.x % scale_entries_per_row;
++    const int scale_block = ksx / scale_entries_per_block;
++
++#pragma unroll
++    for (int i0 = 0; i0 < mmq_y; i0 += nwarps) {
++        int i = i0 + threadIdx.y;
++
++        if (need_check) {
++            i = min(i, i_max);
++        }
++
++        const block_tq2_0 * bxi = (const block_tq2_0 *) x + kbx0 + i*stride + scale_block;
++
++#if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
++        x_df[i*MMQ_MMA_TILE_X_K_Q8_0 + ksx] = bxi->d;
++#else
++        x_df[i*(2*MMQ_TILE_NE_K/QI8_0) + i/(QI8_0/2) + ksx] = bxi->d;
++#endif // defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
++    }
++}
++
+ template <int mmq_y, bool need_check> static __device__ __forceinline__ void load_tiles_q4_0(
+     const char * __restrict__ x, int * __restrict__ x_tile, const int kbx0, const int i_max, const int stride) {
+     constexpr int nwarps = mmq_get_nwarps_device();
+@@ -3382,22 +3459,11 @@ struct mmq_type_traits<mmq_x, mmq_y, need_check, GGML_TYPE_Q2_0> {
+ };
+ template <int mmq_x, int mmq_y, bool need_check>
+ struct mmq_type_traits<mmq_x, mmq_y, need_check, GGML_TYPE_TQ2_0> {
+-    // Phase 1 stub: deliberately mirror Q2_0 to prove the dispatch wiring. The kernel
+-    // will launch and produce wrong output until Phase 2 (load_tiles_tq2_0) and
+-    // Phase 3 (vec_dot_tq2_0_q8_1_dp4a) are in. Specifically:
+-    //   - load_tiles_q2_0 reads Q2_0 blocks (QK2_0=128) but is handed TQ2_0 blocks
+-    //     (QK_K=256) -- the inner loop runs half as many iterations as it should,
+-    //     and reads only the first 32 bytes of qs per row.
+-    //   - vec_dot_q8_0_q8_1_dp4a assumes signed-byte qs laid out by load_tiles_q2_0;
+-    //     the same byte-level shape works for TQ2_0's __vsub4(...,0x01010101)
+-    //     decode only if load_tiles emits signed bytes, which the current
+-    //     load_tiles_q2_0 happens to do.
+-    //   - VDR_TQ2_0_Q8_1_MMQ=4 (matches Q2_0's load_tiles_q2_0 stride). The
+-    //     "correct" value is 8 (QK_K=256/32=8 chunks per block); Phase 4 sets it.
+-    // Phase 4 also reverts the experimental mmvq.cu:254 `return 1` that disables
+-    // MMVQ for TQ2_0 large batches.
++    // load_tiles_tq2_0 expands the strided ternary packing into natural K
++    // order, so the existing signed-Q8 dp4a and MMA consumers are valid.
++    // Runtime dispatch remains disabled until Phase 4 verifies this path.
+     static constexpr int              vdr          = VDR_TQ2_0_Q8_1_MMQ;
+-    static constexpr load_tiles_mmq_t load_tiles   = load_tiles_q2_0<mmq_y, need_check>;
++    static constexpr load_tiles_mmq_t load_tiles   = load_tiles_tq2_0<mmq_y, need_check>;
+     static constexpr vec_dot_mmq_t    vec_dot_mma  = vec_dot_q8_0_q8_1_mma<mmq_x, mmq_y, MMQ_Q8_1_DS_LAYOUT_D4>;
+     static constexpr vec_dot_mmq_t    vec_dot_dp4a = vec_dot_q8_0_q8_1_dp4a<mmq_x, mmq_y>;
+ };

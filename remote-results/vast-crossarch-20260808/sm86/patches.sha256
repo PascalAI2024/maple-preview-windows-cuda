@@ -1,0 +1,7 @@
+a7be6671e2fc8855a873c42cf1c56b5befe4af31c5c53de86e6707424e5b25a6  /workspace/maple-verify/patches/0001-tq2_0-enable-mmvq-for-batch1-moe.patch
+2e4cecaf62def187649f241bd2373a73f3e55e32525ba029d96c7bed9fee598a  /workspace/maple-verify/patches/0002-tq2_0-simd-vecdot.patch
+63a0c9bb9437de55ab639483519679ffd75b42a7a4fe6125e490146a3cbb02a1  /workspace/maple-verify/patches/0003-enable-tq2_0-test-coverage.patch
+c6de02549970112379cf46dde53a18d864538b891db21cabba2699a77d50027f  /workspace/maple-verify/patches/0004-tq2_0-specialized-dequant.patch
+a0b6eb4a7f287d0e78b0471ffb139bef6aea411e61fd6a88ccf887b8cae5b63e  /workspace/maple-verify/patches/0006-tq2_0-mmq-stub.patch
+3b3d9737a2ca803791044657ad4c40fd158b50fea5e922411515a425d4580ae5  /workspace/maple-verify/patches/0007-tq2_0-load-tiles.patch
+4d25138da3c6d1528c6d2d9285741b7c961d00ee9e5d7712b74eb6b47ae204bd  /workspace/maple-verify/patches/0008-tq2_0-enable-mmq.patch

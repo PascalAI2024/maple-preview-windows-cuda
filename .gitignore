@@ -10,6 +10,11 @@ build*/
 # Logs and scratch
 *.log
 
+# Local credentials and paid-compute account metadata
+invoke-vast-env.ps1
+remote-results/vast-crossarch-20260808/contracts.json
+remote-results/vast-crossarch-20260808/selection.json
+
 # Python bytecode
 __pycache__/
 *.py[cod]

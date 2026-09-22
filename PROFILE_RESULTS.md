@@ -28,7 +28,7 @@ that the MMQ change targets prompt processing rather than batch-one generation.
 
 ## Method
 
-Historical target: `C:/Users/pasca/dev/maple/fork` (local build of
+Historical target: `C:/Users/pasca/dev/projects/maple/fork` (local build of
 maple-tq2_0, patches 0001–0004 applied).
 Binary: `build-dequant-fix/bin/llama-bench.exe` (Release, sm_89, CUDA 12.8).
 GPU: NVIDIA GeForce RTX 4080 SUPER (16 GB, cc 8.9).

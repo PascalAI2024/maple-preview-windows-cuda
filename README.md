@@ -1,6 +1,6 @@
 # Running Maple-Preview locally on Windows + CUDA
 
-Four scripts that take a stock Windows machine to a running
+Four setup scripts that take a stock Windows machine to a running
 [Maple-Preview](https://huggingface.co/deepgrove/maple-preview) — a 20B-A1B
 **ternary-weight** MoE reasoning model — served over an OpenAI-compatible API on
 consumer hardware.
@@ -11,18 +11,19 @@ time.
 ---
 ## Headline
 
-llama.cpp cannot load the deepgrove/maple-preview ternary model: it lacks both the `maple` architecture and the `tq2_0` tensor type (GGML type 35). Even when the architecture is forked in, the original CUDA kernels for ternary weights were 7× slower than the q4_k_m reference on consumer hardware. This repo builds the working fork on Windows and ships four CUDA patches that close the generation gap past q4_k_m in **44% of the memory**.
+llama.cpp cannot load the deepgrove/maple-preview ternary model: it lacks both the `maple` architecture and the `tq2_0` tensor type (GGML type 35). Even when the architecture is forked in, the original CUDA kernels for ternary weights were 7× slower than the q4_k_m reference on consumer hardware. This repo builds the working fork on Windows and ships seven local patches that make both generation and prompt processing faster than q4_k_m in **44% of the memory**.
 
 ### TL;DR
 
-- **Generation (tg128)**: 52 → 369 t/s on RTX 4080 SUPER — past `q4_k_m`'s 298 t/s
-- **Prompt processing (pp512)**: 1256 → 1531 t/s — still 5× behind `q4_k_m`; no MMQ kernel yet
+- **Generation (tg128)**: 52 → 362 t/s on RTX 4080 SUPER — past `q4_k_m`'s 298 t/s
+- **Prompt processing (pp512)**: 1256 → 9189 t/s — 13% past `q4_k_m`'s 8130 t/s
 - **Memory**: 7.3 GB vs `q4_k_m`'s 12.3 GB — the ternary argument, validated on hardware
-- **Correctness**: 103/103 unit tests against CPU reference via `test-backend-ops`
+- **Correctness**: 31/31 `MUL_MAT` and 72/72 `MUL_MAT_ID` tests against CPU
+- **Fresh reproduction**: 1457 → 10674 pp512 (7.33×) in a warm A/B/B/A run
 
 ### Patches
 
-Six attempts, four landed. Patches 0001-0004 are auto-applied by `02-build.ps1`; pass `-NoPatch` for stock. Patches 0005 and 0006 are recorded for the record: one a dead end, one still cooking.
+Seven patches are auto-applied by `scripts/02-build.ps1`; pass `-NoPatch` for stock. Number 0005 records a reverted dequant experiment and is intentionally absent from `patches/`.
 
 |Patch|What|Where|Impact (RTX 4080 SUPER)|
 |---|---|---|---|
@@ -31,25 +32,70 @@ Six attempts, four landed. Patches 0001-0004 are auto-applied by `02-build.ps1`;
 |0003|enable tq2_0 in test-backend-ops|`fork/tests/test-backend-ops.cpp`|103/103 unit tests against CPU|
 |0004|specialized 32-thread dequant kernel|`fork/ggml/src/ggml-cuda/convert.cu`|pp: 1422 → 1531 (+7.6%), tg: 353 → 369 (+4.4%)|
 |0005|vectorized uint16_t dequant|*(reverted — regressed ~2%)*|—|
-|0006|MMQ dispatch stub|*(in flight)*|—|
+|0006|wire dormant TQ2_0 MMQ dispatch and sizing|`fork/ggml/src/ggml-cuda/mmq.cu`, `mmq.cuh`|compile-only prerequisite|
+|0007|natural-K TQ2_0 shared-memory tile loader|`fork/ggml/src/ggml-cuda/mmq.cuh`|correctness prerequisite|
+|0008|enable TQ2_0 MMQ and register its generated instance|`fork/ggml/src/ggml-cuda/mmq.cu`|pp: 1505 → 9189 t/s (6.1×); 103/103 tests|
 
 **0001 / 0002** are the headline pair. 0001 is a single-line guard fix — the ternary MMVQ kernel existed and was wired for MoE expert routing, but `get_mmvq_mmid_max_batch` returned `-1` and the call site tested `ne2 <= -1`, which is unreachable since `ne2` is a batch size ≥ 1. 0002 vectorizes `vec_dot_tq2_0_q8_1`: 4 codes per step using `__vsub4` (per-byte subtract, not plain integer — avoids borrow across codes) and `ggml_cuda_dp4a` for the 4-way dot product. 32 scalar iterations → 8 SIMD iterations.
 
 **0003 / 0004** are the supporting pair. 0003 wires ternary into `test-backend-ops`, which had it commented out with `// TODO: implement for all backends` — that omission is how the 0001 bug survived. 0004 adds a specialized `dequantize_block_tq2_0` kernel mirroring `dequantize_block_q4_0`: 32 threads/block, each reads one byte per block half and emits 8 fp32 values via per-lane extraction; 8 coalesced fp32 writes per warp.
+
+**0006 / 0007 / 0008** close the prompt-processing gap without a separate ternary MMA implementation. The loader expands TQ2_0's strided 2-bit packing into natural K-order signed bytes, replicates its block scale across the eight Q8_1 scale slots, and reuses llama.cpp's existing signed-s8 Turing MMA consumer. 0008 enables the path after the controlled correctness gate.
 
 ### Current state (RTX 4080 SUPER, sm_89)
 
 |Configuration|pp512|tg128|VRAM|
 |---|---:|---:|---:|
 |stock fork|1256|52|7.3 GB|
-|+ patches 0001-0004 (this fork)|**1531**|**369**|7.3 GB|
+|+ patches 0001-0008 (0005 reverted)|**9189**|**362**|7.3 GB|
 |q4_k_m reference (mature CUDA)|8130|298|12.3 GB|
 
-The patched ternary build now **generates faster than Q4_K** (369 vs 298 t/s) in 44% of the memory. Per gigabyte of weights, it does **2.9× more work** than Q4_K — the entire argument for ternary quantization, before these fixes was being thrown away by the CUDA path.
+The patched ternary build now beats Q4_K in both measured paths while using 44% of the memory: pp512 is 13% faster (9189 vs 8130 t/s), and tg128 is 21% faster (362 vs 298 t/s). The MMQ enablement alone improved pp512 from a matched 1505 to 9189 t/s (6.1×); isolated generation remained unchanged within noise (358.0 vs 361.8 t/s).
+
+#### Reproducibility refresh — 2026-08-09
+
+A fresh warm-state A/B/B/A run on the same RTX 4080 SUPER, now using driver
+610.62, reproduced the prompt-path result: **1457 → 10674 pp512 (7.33×)**.
+Generation medians were effectively identical at 375.0 vs 374.8 tg128, and the
+enabled build again passed all 103 CPU-reference cases. The original 9189/8130
+comparison above is retained because its TQ2_0 and Q4_K control were measured in
+the same earlier environment; the new run did not re-benchmark Q4_K.
+
+```mermaid
+xychart-beta
+    title "Fresh controlled MMQ reproduction (pp512, t/s)"
+    x-axis ["MMQ disabled", "MMQ enabled"]
+    y-axis "tokens / sec" 0 --> 12000
+    bar [1457.1, 10674.0]
+```
+
+The public [Hugging Face benchmark dataset](https://huggingface.co/datasets/x0me/maple-preview-cuda-benchmarks)
+contains every sample, exact patch/model hashes, the benchmark harness, raw
+correctness logs, and the sm_86/sm_120 evidence. It contains no model weights.
+
+### Cross-architecture validation
+
+|GPU|CUDA arch|`MUL_MAT`|`MUL_MAT_ID`|pp512|tg128|
+|---|---:|---:|---:|---:|---:|
+|RTX 2080 Ti|sm_75|31/31|72/72|—|—|
+|RTX 3080|sm_86|31/31|72/72|6986|343|
+|RTX 4080 SUPER|sm_89|31/31|72/72|9189 original / 10674 refresh|362 original / 370 refresh|
+|RTX 5060 Ti|sm_120|31/31|72/72|5738|324|
+
+The fused MMQ path compiles and matches the CPU reference on Turing, Ampere,
+Ada, and Blackwell. Reproducibility artifacts for sm_86 and sm_120 are in
+[`remote-results/vast-crossarch-20260808/`](remote-results/vast-crossarch-20260808/).
+The latest local A/B/B/A run is in
+[`remote-results/local-controlled-20260809/`](remote-results/local-controlled-20260809/).
+The rented sm_75 node completed both correctness matrices, but its external
+network stalled before the 5.1 GiB model download, so no sm_75 throughput number
+is claimed.
 
 ### What's next
 
-The 5× pp512 gap is closed only by a fused MMQ kernel — dequant + GEMM + write FP32 in one launch. The chosen approach: adapt `Q2_0`'s MMQ as the template, ~8 working days to a working `dp4a` baseline. Phase 1 (a dispatch stub so the framework admits the type to the MMQ codepath) is in flight as patch 0006.
+Correctness portability is complete across four CUDA generations. Remaining
+work is architecture-specific tuning: sm_86 and sm_120 are correct but leave
+throughput on the table relative to the tuned sm_89 path.
 
 Full design: **[→ MMQ_DESIGN.md](MMQ_DESIGN.md)**.
 
@@ -185,16 +231,19 @@ Everything below was measured on this setup, not estimated or copied.
 
 | Metric | Value |
 |---|---|
-| Prompt processing (pp512) | **1636 t/s** |
-| Token generation (tg128) | **376.7 t/s** |
+| Prompt processing (pp512) | **9189 t/s** matched mean |
+| Token generation (tg128) | **361.8 ± 3.7 t/s** |
 | VRAM, 8K ctx, 4 server slots | **7.3 GB** of 16 GB |
 | Model load → first token | ~3 s |
 | Build time (434 targets, one arch) | ~10 min |
 
-A 20B-parameter model generating at **~377 t/s in 7.3 GB of VRAM** is the whole
-point of ternary weights.
+A 20B-parameter model generating at **~362 t/s** and processing prompts at
+**9189 t/s in 7.3 GB of VRAM** is the whole point of ternary weights.
 
 ### Two CUDA fixes, 7.2× faster generation
+
+This subsection records the generation work before the later fused-MMQ prompt
+path. The final seven-patch numbers are in the table above.
 
 Out of the box this ran at **52 t/s**. Two changes to the ternary kernels took it
 to **377 t/s**:
@@ -206,14 +255,14 @@ to **377 t/s**:
 | `+ 0002` SIMD ternary vec_dot | **1635.8** | **376.7** | **7.2×** |
 | `q4_k_m` reference (mature kernels) | 8130.5 | 298.2 | — |
 
-Note the patched ternary build now **generates faster than Q4_K** (377 vs 298
-t/s) in **44% of the memory** — while still trailing badly on prompt processing,
-which is the missing MMQ kernels.
+At this stage the patched ternary build **generated faster than Q4_K** (377 vs
+298 t/s) in **44% of the memory**, while prompt processing still used the
+fallback path. Patches 0006–0008 subsequently closed that gap.
 
 ```mermaid
 xychart-beta
     title "Generation efficiency (tokens/sec per GiB of weights)"
-    x-axis ["tq2_0 stock", "tq2_0 patched", "q4_k_m"]
+    x-axis ["tq2_0 stock", "+ fixes 1–2", "q4_k_m"]
     y-axis "t/s per GiB" 0 --> 80
     bar [10.3, 74.3, 26.0]
 ```
@@ -246,7 +295,7 @@ flowchart TD
     E -->|"NEVER TRUE"| F{"should_use_mmq?"}
     E -.->|"unreachable"| G["ggml_cuda_mul_mat_vec_q<br/>fast ternary kernel"]
 
-    F -->|"no ternary MMQ kernels"| H{"should_use_mmf?"}
+    F -->|"stock fork: TQ2_0 MMQ disabled"| H{"should_use_mmf?"}
     H -->|"float types only"| I["generic fallback:<br/>dequantize TQ2_0 → F32<br/>then general GEMM"]
 
     I --> J["52 t/s"]
@@ -314,20 +363,22 @@ flowchart LR
     style R fill:#15803d,stroke:#14532d,color:#fff
 ```
 
-Both fixes together, measured across all three metrics:
+The prompt-processing progression, including the later fused-MMQ work:
 
 ```mermaid
 xychart-beta
-    title "Prompt processing (pp512, t/s)"
-    x-axis ["stock fork", "+ fix 1 (MMVQ)", "+ fix 2 (SIMD)", "q4_k_m ref"]
-    y-axis "tokens / sec" 0 --> 8500
-    bar [1255.7, 1173.4, 1635.8, 8130.5]
+    title "Prompt processing before and after fused MMQ (pp512, t/s)"
+    x-axis ["stock fork", "+ fixes 1–4", "+ fused MMQ", "q4_k_m ref"]
+    y-axis "tokens / sec" 0 --> 10000
+    bar [1255.7, 1505.0, 9189.0, 8130.5]
 ```
 
-Prompt processing is where ternary still loses badly — that 5× gap to `q4_k_m` is
-the missing MMQ kernels, and it is the honest remaining work.
+The matched fallback mean after fixes 1–4 was 1505 t/s. Patches 0006–0008 replaced
+that staging pipeline with fused MMQ and reached 9189 t/s, 13% above the
+`q4_k_m` reference on this sm_89 system.
 
-Patches are applied automatically by `02-build.ps1`; use `-NoPatch` for stock.
+Patches are applied automatically by `scripts/02-build.ps1`; use `-NoPatch` for
+stock.
 
 ### Fix 3 — specialized dequant kernel
 
@@ -349,11 +400,11 @@ half** and produces 8 fp32 values via per-lane extraction from the packed byte.
 (Measured on RTX 4080 SUPER, sm_89, CUDA 12.8 — same setup as the table above;
 pp512 / tg128 are means over three `llama-bench` runs.)
 
-Why this is a smaller win than Fixes 1–2: prompt processing is still gated by the
-dequant → F32 cuBLAS GEMM path, and there's no ternary MMQ kernel. Most of the
-prompt-processing time lives in the GEMM, not the dequant — so even a 2× faster
-dequant shows up as a modest pp improvement. The honest remaining gap to
-`q4_k_m` (8130 t/s) is the MMQ kernel, not the dequant.
+Why this was a smaller win than Fixes 1–2: at that stage prompt processing was
+still gated by the dequant → F32 cuBLAS GEMM path. Most of the time lived in the
+GEMM and staging conversions, so even a faster standalone dequant produced only
+a modest gain. Patches 0006–0008 later removed that pipeline with fused MMQ,
+taking pp512 from a matched 1505 to 9189 t/s.
 
 Validated: 31/31 `MUL_MAT(type_a=tq2_0,…)` tests pass and 72/72
 `MUL_MAT_ID(type_a=tq2_0,…)` tests pass against the CPU reference. Same
@@ -389,7 +440,7 @@ flowchart LR
     S4 --> API["OpenAI API /v1"]
     S4 --> B["llama-bench"]
 
-P[("patches/<br/>0001 · 0002 · 0003 · 0004")] -.->|auto-applied| S2
+P[("patches/<br/>0001–0008<br/>(0005 reverted)")] -.->|auto-applied| S2
     HF[("🤗 stamsam/<br/>maple-preview-gguf")] -.-> S3
 
     style S2 fill:#1d4ed8,stroke:#1e3a8a,color:#fff
@@ -405,6 +456,7 @@ fetched by the scripts.
 | `02-build.ps1` | Clones `stamsam/llama.cpp@prism`, builds with CUDA | Detects compute capability from `nvidia-smi`; asserts `LLM_ARCH_MAPLE` is present before spending 30 min on nvcc |
 | `03-download-model.ps1` | Fetches a GGUF from Hugging Face | Resumable; verifies byte count and GGUF magic |
 | `04-run.ps1` | Runs `chat`, `server`, `complete`, or `bench` | `-NGL 99` offloads every layer; adds CUDA to PATH so the loader finds `cudart`/`cublas` |
+| `05-validate-benchmark.ps1` | Runs warm A/B/B/A MMQ validation and CPU-reference tests | Writes normalized samples, hashes, GPU state, manifests, and complete correctness logs |
 
 `04-run.ps1 -Mode <mode>`:
 
@@ -484,13 +536,16 @@ Read these before drawing conclusions from anything this repo produces.
   or systematic evals yet."*
 - **The fork is a research port, not a distribution.** It publishes no releases,
   which is why these scripts build from source.
-- **`tq2_0` GPU support is new.** Its CUDA kernels landed at rev `9ee03ee`.
-  Large-batch matmuls still fall back to dequant+GEMM because the ternary `mmq`
-  kernels are not written yet — measured at ~7× slower prompt processing than
-  `q4_k_m` on the identical model. That is the main remaining gap.
-- **The performance patch is mine, not upstream's**, and is verified on exactly
-  one GPU (sm_89). See [the writeup](docs/moe-ternary-perf-fix.md) for what was
-  and was not checked; `-NoPatch` builds the fork stock.
+- **`tq2_0` GPU support is new.** Its original CUDA kernels landed at rev
+  `9ee03ee`; patches 0006–0008 add the local fused MMQ path. The path passes
+  31/31 `MUL_MAT` and 72/72 `MUL_MAT_ID` cases against the CPU reference on
+  sm_75, sm_86, sm_89, and sm_120. Architecture-specific performance still
+  varies; the remote sm_86 and sm_120 results are slower than the tuned sm_89
+  result.
+- **The performance patches are local, not upstream's.** See
+  [the writeup](docs/moe-ternary-perf-fix.md) and
+  [the MMQ design](MMQ_DESIGN.md) for the implementation and verification
+  boundaries; `-NoPatch` builds the fork stock.
 - **LM Studio is untouched.** Nothing here modifies your existing install; the
   fork runs as a separate server.
 - **If mainline llama.cpp ever merges `maple` + `tq2_0`, this repo is

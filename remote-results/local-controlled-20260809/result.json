@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "status": "complete",
+  "started_utc": "2026-08-09T05:41:56.0292740Z",
+  "completed_utc": "2026-08-09T05:42:39.9604291Z",
+  "host_class": "local-controlled",
+  "gpu": "NVIDIA GeForce RTX 4080 SUPER",
+  "compute_capability": "8.9",
+  "driver_version": "610.62",
+  "cuda_toolkit_version": "12.8",
+  "benchmark_protocol": "warmup each build, then A/B/B/A; 5 samples per metric per recorded invocation",
+  "repetitions_per_invocation": 5,
+  "threads": 8,
+  "correctness": {
+    "mul_mat": "31/31",
+    "mul_mat_id": "72/72"
+  },
+  "pp512": {
+    "mmq": {
+      "sample_count": 10,
+      "mean_ts": 10674.01,
+      "median_ts": 10668.3,
+      "stddev_ts": 100.620191,
+      "min_ts": 10504.0,
+      "max_ts": 10842.5
+    },
+    "fallback": {
+      "sample_count": 10,
+      "mean_ts": 1457.103,
+      "median_ts": 1486.005,
+      "stddev_ts": 91.340978,
+      "min_ts": 1266.97,
+      "max_ts": 1562.58
+    },
+    "speedup_mean": 7.325501
+  },
+  "tg128": {
+    "mmq": {
+      "sample_count": 10,
+      "mean_ts": 370.0419,
+      "median_ts": 374.8155,
+      "stddev_ts": 10.394046,
+      "min_ts": 348.559,
+      "max_ts": 379.13
+    },
+    "fallback": {
+      "sample_count": 10,
+      "mean_ts": 376.1809,
+      "median_ts": 375.0355,
+      "stddev_ts": 4.158392,
+      "min_ts": 369.335,
+      "max_ts": 383.224
+    },
+    "speedup_mean": 0.983681
+  }
+}

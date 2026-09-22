@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "status": "complete",
+  "started_utc": "2026-08-08T08:32:30Z",
+  "completed_utc": "2026-08-08T08:32:54Z",
+  "gpu_name": "NVIDIA GeForce RTX 5060 Ti",
+  "compute_capability": "12.0",
+  "cuda_arch": "120",
+  "gpu_memory": "16311 MiB",
+  "driver_version": "595.71.05",
+  "mul_mat_passed": 31,
+  "mul_mat_id_passed": 72,
+  "pp512_avg_ts": 5738.427502,
+  "pp512_stddev_ts": 43.22768,
+  "tg128_avg_ts": 323.885166,
+  "tg128_stddev_ts": 1.953033
+}

@@ -1,12 +1,18 @@
 # Running Maple-Preview locally on Windows + CUDA
 
-Four setup scripts that take a stock Windows machine to a running
+Setup scripts (01 to 04, plus 05 for validation) that take a stock Windows machine to a running
 [Maple-Preview](https://huggingface.co/deepgrove/maple-preview) — a 20B-A1B
 **ternary-weight** MoE reasoning model — served over an OpenAI-compatible API on
 consumer hardware.
 
 No weights are committed here. Everything is pulled from Hugging Face at setup
 time.
+
+**Status, as of 2026-11-05:** an engineering record, not a maintained product. The benchmark results in the chart were measured on 2026-08-08 and 2026-08-09 and have not been re-run since; the last commit before this edit is d2f8dbb (2026-09-22). Every figure is specific to the GPU, driver and build named next to it.
+
+![Maple-Preview TQ2_0 prompt processing and token generation, by GPU](docs/img/maple-benchmarks.png)
+
+Mean tokens per second with one standard deviation, read from the committed `result.json` files under [`remote-results/`](remote-results/) by [`scripts/plot-benchmarks.py`](scripts/plot-benchmarks.py) (local A/B/B/A run on 2026-08-09, rented-host runs on 2026-08-08). Generation speed on the 4080 SUPER is unchanged by the prompt-processing patch (376 vs 370 t/s, within noise). To redraw: `python scripts/plot-benchmarks.py` (needs matplotlib).
 
 ---
 ## Headline
